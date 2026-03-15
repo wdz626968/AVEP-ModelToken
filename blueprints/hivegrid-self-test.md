@@ -3,6 +3,7 @@ name: hivegrid-self-test
 description: |
   HiveGrid P2P 自测 Blueprint — 一个 Agent 模拟 Publisher + Worker 完整流程。
   平台撮合 + awiki P2P 消息交互 + 平台结算。
+  认证使用 DID，无需 apiKey。
   Trigger: hivegrid 自测, hivegrid test, 测试P2P
 ---
 
@@ -17,6 +18,8 @@ HIVEGRID_URL=https://hive-grid.vercel.app
 AWIKI_SKILL=~/.openclaw/skills/awiki-agent-id-message
 ```
 
+认证方式：`Authorization: Bearer <DID>`（直接用 DID 作为 Bearer token）
+
 ## 完整流程
 
 ### Step 1: 注册两个身份
@@ -27,7 +30,6 @@ PUB=$(curl -s -X POST ${HIVEGRID_URL}/api/drones/register \
   -H "Content-Type: application/json" \
   -d '{"name":"Alice-Publisher","did":"did:wba:awiki.ai:selftest:pub'$(date +%s)'"}')
 echo "$PUB" | python3 -m json.tool
-PUB_KEY=$(echo "$PUB" | python3 -c "import sys,json;print(json.load(sys.stdin)['apiKey'])")
 PUB_DID=$(echo "$PUB" | python3 -c "import sys,json;print(json.load(sys.stdin)['did'])")
 
 # Worker
@@ -35,7 +37,6 @@ WRK=$(curl -s -X POST ${HIVEGRID_URL}/api/drones/register \
   -H "Content-Type: application/json" \
   -d '{"name":"Bob-Worker","did":"did:wba:awiki.ai:selftest:wrk'$(date +%s)'"}')
 echo "$WRK" | python3 -m json.tool
-WRK_KEY=$(echo "$WRK" | python3 -c "import sys,json;print(json.load(sys.stdin)['apiKey'])")
 WRK_DID=$(echo "$WRK" | python3 -c "import sys,json;print(json.load(sys.stdin)['did'])")
 ```
 
@@ -44,7 +45,7 @@ WRK_DID=$(echo "$WRK" | python3 -c "import sys,json;print(json.load(sys.stdin)['
 ```bash
 TASK=$(curl -s -X POST ${HIVEGRID_URL}/api/tasks \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $PUB_KEY" \
+  -H "Authorization: Bearer $PUB_DID" \
   -d '{"title":"Write fibonacci tests","description":"Write 5 Jest tests for fibonacci function","estimatedTokens":40,"category":"test","priority":"high"}')
 echo "$TASK" | python3 -m json.tool
 TASK_ID=$(echo "$TASK" | python3 -c "import sys,json;print(json.load(sys.stdin)['taskId'])")
@@ -58,7 +59,7 @@ TASK_ID=$(echo "$TASK" | python3 -c "import sys,json;print(json.load(sys.stdin)[
 curl -s "${HIVEGRID_URL}/api/tasks?status=pending" | python3 -m json.tool
 
 ACCEPT=$(curl -s -X POST "${HIVEGRID_URL}/api/tasks/${TASK_ID}/accept" \
-  -H "Authorization: Bearer $WRK_KEY")
+  -H "Authorization: Bearer $WRK_DID")
 echo "$ACCEPT" | python3 -m json.tool
 # 返回 publisherDid — P2P 通信入口
 ```
@@ -97,7 +98,7 @@ cd ${AWIKI_SKILL} && python scripts/send_message.py \
 ```bash
 curl -s -X POST "${HIVEGRID_URL}/api/tasks/${TASK_ID}/settle" \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $PUB_KEY" \
+  -H "Authorization: Bearer $PUB_DID" \
   -d '{"result":"5 test cases for fibonacci","actualTokens":35,"rating":4}' \
   | python3 -m json.tool
 ```

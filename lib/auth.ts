@@ -5,15 +5,14 @@ import { Drone } from "@prisma/client";
 
 export interface AuthResult {
   drone: Drone;
-  method: "bearer";
+  method: "bearer" | "did";
 }
 
 /**
- * Authenticate a Drone via Bearer token (API Key).
- *
- * DID:WBA identity is used for registration and cross-platform discovery,
- * but HiveGrid API calls use Bearer tokens for simplicity.
- * The DID is the Drone's portable identity; the API Key is its HiveGrid session key.
+ * Authenticate a Drone via Bearer token.
+ * Supports two schemes:
+ *   - Bearer hg_xxx  → API Key (legacy)
+ *   - Bearer did:wba:... → DID-based lookup
  */
 export async function authenticateDrone(
   request: NextRequest
@@ -22,18 +21,29 @@ export async function authenticateDrone(
   if (!authHeader) return null;
 
   if (authHeader.startsWith("Bearer ")) {
-    return authenticateWithBearer(authHeader);
+    const token = authHeader.slice(7).trim();
+    if (token.startsWith("did:")) {
+      return authenticateWithDID(token);
+    }
+    if (token.startsWith("hg_")) {
+      return authenticateWithApiKey(token);
+    }
   }
 
   return null;
 }
 
-async function authenticateWithBearer(
-  authHeader: string
+async function authenticateWithDID(
+  did: string
 ): Promise<AuthResult | null> {
-  const apiKey = authHeader.slice(7);
-  if (!apiKey || !apiKey.startsWith("hg_")) return null;
+  const drone = await prisma.drone.findFirst({ where: { did } });
+  if (!drone) return null;
+  return { drone, method: "did" };
+}
 
+async function authenticateWithApiKey(
+  apiKey: string
+): Promise<AuthResult | null> {
   const prefix = apiKey.slice(0, 11);
   const drone = await prisma.drone.findUnique({
     where: { apiKeyPrefix: prefix },
