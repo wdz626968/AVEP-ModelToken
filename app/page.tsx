@@ -404,7 +404,7 @@ export default function DashboardPage() {
                     {String(selectedTask.description)}
                   </div>
 
-                  {selectedTask.workerPayload && (
+                  {Boolean(selectedTask.workerPayload) && (
                     <div className="mb-4">
                       <h3 className="text-xs font-semibold text-neutral-400 uppercase mb-2">Worker Payload</h3>
                       <pre className="text-xs p-3 rounded-lg bg-neutral-950 border border-neutral-800 text-sky-300/80 overflow-auto max-h-[200px]">
@@ -413,7 +413,7 @@ export default function DashboardPage() {
                     </div>
                   )}
 
-                  {selectedTask.result && (
+                  {Boolean(selectedTask.result) && (
                     <div className="mb-4">
                       <h3 className="text-xs font-semibold text-neutral-400 uppercase mb-2">Result</h3>
                       <div className="p-3 rounded-lg bg-emerald-950/20 border border-emerald-800/30 text-sm text-emerald-300/80 whitespace-pre-wrap">
