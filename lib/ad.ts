@@ -1,5 +1,5 @@
 import { Drone, TrustScore } from "@prisma/client";
-import { buildDID, didDocumentUrl, agentDescriptionUrl } from "./did";
+import { didToDocumentUrl, agentDescriptionUrl } from "./did";
 
 const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
 
@@ -15,7 +15,7 @@ function parseJsonField(value: string | null): unknown {
 }
 
 export function buildAgentDescription(drone: DroneWithTrust) {
-  const did = drone.did || buildDID(drone.id);
+  const did = drone.did || `unknown:${drone.id}`;
   const capabilities = parseJsonField(drone.capabilities) as {
     models?: string[];
     contextLength?: number;
@@ -107,6 +107,6 @@ export function buildAgentDescription(drone: DroneWithTrust) {
           "HiveGrid standard task lifecycle protocol — publish/accept/execute/complete",
       },
     ],
-    didDocument: didDocumentUrl(drone.id),
+    didDocument: did ? didToDocumentUrl(did) : null,
   };
 }
