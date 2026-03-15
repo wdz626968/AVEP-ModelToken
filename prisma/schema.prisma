@@ -1,0 +1,112 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model Drone {
+  id                String    @id @default(cuid())
+  name              String
+  apiKeyPrefix      String    @unique @map("api_key_prefix")
+  apiKeyHash        String    @map("api_key_hash")
+  bondCode          String    @unique @map("bond_code")
+  verificationCode  String    @map("verification_code")
+
+  status            String    @default("unbonded")
+  nectar            Int       @default(100)
+  totalEarned       Int       @default(0) @map("total_earned")
+  totalSpent        Int       @default(0) @map("total_spent")
+  tasksPublished    Int       @default(0) @map("tasks_published")
+  tasksCompleted    Int       @default(0) @map("tasks_completed")
+  lastHeartbeat     DateTime? @map("last_heartbeat")
+  capabilities      String?
+  preferences       String?
+
+  did               String?   @unique
+  didDocument       String?   @map("did_document")
+  publicKeyJwk      String?   @map("public_key_jwk")
+  didCreatedAt      DateTime? @map("did_created_at")
+  didRotatedAt      DateTime? @map("did_rotated_at")
+
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  trustScore        TrustScore?
+  publishedTasks    Task[]         @relation("TaskPublisher")
+  workedTasks       Task[]         @relation("TaskWorker")
+  ledgerEntries     NectarLedger[]
+
+  @@map("drones")
+}
+
+model TrustScore {
+  id                 String   @id @default(cuid())
+  droneId            String   @unique @map("drone_id")
+  drone              Drone    @relation(fields: [droneId], references: [id])
+  overallScore       Float    @default(50.0) @map("overall_score")
+  probePassRate      Float    @default(0.0) @map("probe_pass_rate")
+  taskCompletionRate Float    @default(0.0) @map("task_completion_rate")
+  avgResponseMs      Float    @default(0.0) @map("avg_response_ms")
+  authenticityScore  Float    @default(50.0) @map("authenticity_score")
+  uptimeRatio        Float    @default(0.0) @map("uptime_ratio")
+  totalProbes        Int      @default(0) @map("total_probes")
+  totalTasks         Int      @default(0) @map("total_tasks")
+  lastCalculatedAt   DateTime @default(now()) @map("last_calculated_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  @@map("trust_scores")
+}
+
+model Task {
+  id               String    @id @default(cuid())
+  title            String
+  description      String
+  publicPayload    String?   @map("public_payload")
+  workerPayload    String?   @map("worker_payload")
+  estimatedTokens  Int       @map("estimated_tokens")
+  lockedNectar     Int       @map("locked_nectar")
+  priority         String    @default("medium")
+  category         String?
+  status           String    @default("pending")
+
+  publisherId      String    @map("publisher_id")
+  publisher        Drone     @relation("TaskPublisher", fields: [publisherId], references: [id])
+  workerId         String?   @map("worker_id")
+  worker           Drone?    @relation("TaskWorker", fields: [workerId], references: [id])
+
+  result           String?
+  actualTokens     Int?      @map("actual_tokens")
+  rating           Int?
+
+  acceptedAt       DateTime? @map("accepted_at")
+  completedAt      DateTime? @map("completed_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  ledgerEntries    NectarLedger[]
+
+  @@index([status, priority])
+  @@index([publisherId])
+  @@index([workerId])
+  @@map("tasks")
+}
+
+model NectarLedger {
+  id           String   @id @default(cuid())
+  droneId      String   @map("drone_id")
+  drone        Drone    @relation(fields: [droneId], references: [id])
+  taskId       String?  @map("task_id")
+  task         Task?    @relation(fields: [taskId], references: [id])
+  type         String
+  amount       Int
+  balanceAfter Int      @map("balance_after")
+  description  String?
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([droneId, createdAt])
+  @@map("nectar_ledger")
+}
