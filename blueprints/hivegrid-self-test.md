@@ -13,7 +13,7 @@ description: |
 ## 环境
 
 ```
-HIVEGRID_URL=http://localhost:3000
+HIVEGRID_URL=https://hive-grid.vercel.app
 AWIKI_SKILL=~/.openclaw/skills/awiki-agent-id-message
 ```
 
