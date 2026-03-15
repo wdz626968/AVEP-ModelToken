@@ -328,7 +328,7 @@ export default function DashboardPage() {
               </div>
               {pubResult && (
                 <div className="mt-3 p-2 rounded-lg bg-emerald-950/30 border border-emerald-800/30 text-xs text-emerald-400">
-                  Published! Task {(pubResult as Record<string, unknown>).taskId as string} — Locked {(pubResult as Record<string, unknown>).lockedNectar as number} Nectar
+                  Published! Task {String((pubResult as Record<string, unknown>).taskId)} — Locked {String((pubResult as Record<string, unknown>).lockedNectar)} Nectar
                 </div>
               )}
               {pubError && <div className="mt-3 p-2 rounded-lg bg-red-950/30 border border-red-800/30 text-xs text-red-400">{pubError}</div>}
@@ -385,23 +385,23 @@ export default function DashboardPage() {
                 <div>
                   <div className="flex items-start justify-between mb-4">
                     <div>
-                      <h2 className="text-lg font-semibold">{selectedTask.title as string}</h2>
+                      <h2 className="text-lg font-semibold">{String(selectedTask.title)}</h2>
                       <div className="flex gap-2 mt-1">
                         <span className={`text-xs px-2 py-0.5 rounded-full ${statusColors[(selectedTask.status as string)] || ""}`}>
-                          {selectedTask.status as string}
+                          {String(selectedTask.status)}
                         </span>
-                        <span className="text-xs text-neutral-500">{selectedTask.priority as string} priority</span>
-                        {selectedTask.category && <span className="text-xs text-neutral-500">{selectedTask.category as string}</span>}
+                        <span className="text-xs text-neutral-500">{String(selectedTask.priority)} priority</span>
+                        {selectedTask.category ? <span className="text-xs text-neutral-500">{String(selectedTask.category)}</span> : null}
                       </div>
                     </div>
                     <div className="text-right text-sm">
-                      <div className="text-amber-400 font-medium">{selectedTask.estimatedTokens as number} tokens</div>
+                      <div className="text-amber-400 font-medium">{Number(selectedTask.estimatedTokens)} tokens</div>
                       <div className="text-xs text-neutral-500">by {(selectedTask.publisher as Record<string, string>)?.name}</div>
                     </div>
                   </div>
 
                   <div className="mb-4 p-3 rounded-lg bg-neutral-950 border border-neutral-800 text-sm text-neutral-300 whitespace-pre-wrap">
-                    {selectedTask.description as string}
+                    {String(selectedTask.description)}
                   </div>
 
                   {selectedTask.workerPayload && (
@@ -417,9 +417,9 @@ export default function DashboardPage() {
                     <div className="mb-4">
                       <h3 className="text-xs font-semibold text-neutral-400 uppercase mb-2">Result</h3>
                       <div className="p-3 rounded-lg bg-emerald-950/20 border border-emerald-800/30 text-sm text-emerald-300/80 whitespace-pre-wrap">
-                        {selectedTask.result as string}
+                        {String(selectedTask.result)}
                       </div>
-                      <div className="mt-1 text-xs text-neutral-500">Actual tokens: {selectedTask.actualTokens as number}</div>
+                      <div className="mt-1 text-xs text-neutral-500">Actual tokens: {Number(selectedTask.actualTokens)}</div>
                     </div>
                   )}
 
@@ -469,7 +469,7 @@ export default function DashboardPage() {
                             className="w-full px-3 py-2 rounded-lg bg-neutral-800 border border-neutral-700 text-sm focus:outline-none focus:border-amber-500/50 placeholder:text-neutral-500 resize-none" />
                           <div className="flex gap-2 items-center mt-2">
                             <input type="number" value={settleTokens} onChange={(e) => setSettleTokens(Number(e.target.value))}
-                              min={1} max={selectedTask.estimatedTokens as number} placeholder="Actual tokens"
+                              min={1} max={Number(selectedTask.estimatedTokens)} placeholder="Actual tokens"
                               className="w-28 px-2 py-1.5 rounded bg-neutral-800 border border-neutral-700 text-sm focus:outline-none focus:border-amber-500/50" />
                             <select value={settleRating} onChange={(e) => setSettleRating(Number(e.target.value))}
                               className="w-20 px-2 py-1.5 rounded bg-neutral-800 border border-neutral-700 text-sm focus:outline-none">
@@ -521,8 +521,8 @@ export default function DashboardPage() {
                 <div className="mt-3 p-3 rounded-lg bg-emerald-950/30 border border-emerald-800/30 text-xs">
                   <div className="text-emerald-400 font-medium mb-1">Registered!</div>
                   <div className="text-neutral-400 break-all space-y-1">
-                    <div><span className="text-neutral-500">API Key:</span> <code className="text-amber-400">{regResult.apiKey as string}</code></div>
-                    <div><span className="text-neutral-500">DID:</span> {regResult.did as string}</div>
+                    <div><span className="text-neutral-500">API Key:</span> <code className="text-amber-400">{String(regResult.apiKey)}</code></div>
+                    <div><span className="text-neutral-500">DID:</span> {String(regResult.did)}</div>
                   </div>
                 </div>
               )}
