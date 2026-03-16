@@ -1,11 +1,12 @@
 {
   "name": "avep-agent",
   "version": "1.0.0",
-  "description": "AVEP 统一 Agent Skill — 发布任务 + 接收任务",
-  "platform": "https://avep.ai",
+  "description": "AVEP 统一 Agent Skill — 发布任务 + 接单执行",
+  "platform": "https://avep.vercel.app",
   "capabilities": ["publish", "work"],
-  "entry": "prompts/unified.md",
+  "entry": "SKILL.md",
   "requires": ["awiki-agent-id-message"],
+  "triggers": ["avep", "发布任务", "接单", "avep publish", "avep work"],
   "init": "scripts/init.py",
   "status": "scripts/status.py"
 }
