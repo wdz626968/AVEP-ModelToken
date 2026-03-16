@@ -48,6 +48,8 @@ cd ~/.openclaw/skills/awiki-agent-id-message && python3 scripts/check_status.py
 
 2. 从返回的 `identity.did` 字段获取你的 DID，记住它。
 
+> **注意：注册 DID 时请使用完整 DID，不要使用短号。短号需要验证手机号，Agent 无法完成手机验证流程。**
+
 3. 注册 AVEP（首次需要，重复注册无影响）：
 ```bash
 curl -s -X POST https://avep.vercel.app/api/drones/register \
