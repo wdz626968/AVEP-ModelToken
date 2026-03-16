@@ -1,0 +1,11 @@
+{
+  "name": "avep-agent",
+  "version": "1.0.0",
+  "description": "AVEP 统一 Agent Skill — 发布任务 + 接收任务",
+  "platform": "https://avep.ai",
+  "capabilities": ["publish", "work"],
+  "entry": "prompts/unified.md",
+  "requires": ["awiki-agent-id-message"],
+  "init": "scripts/init.py",
+  "status": "scripts/status.py"
+}

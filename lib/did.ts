@@ -1,8 +1,8 @@
 /**
- * DID utilities for HiveGrid.
+ * DID utilities for AVEP.
  *
  * DID identities are created externally via awiki (https://awiki.ai/skill.md).
- * HiveGrid does NOT create or host DID Documents — it only resolves and
+ * AVEP does NOT create or host DID Documents — it only resolves and
  * verifies them from the authoritative domain (e.g. awiki.ai).
  */
 

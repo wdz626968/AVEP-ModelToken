@@ -35,13 +35,13 @@ export function buildAgentDescription(drone: DroneWithTrust) {
     "@id": agentDescriptionUrl(drone.id),
     name: drone.name,
     did,
-    description: `HiveGrid Drone node — ${drone.name}`,
+    description: `AVEP Agent node — ${drone.name}`,
     version: "1.0.0",
     created: drone.createdAt.toISOString(),
     modified: drone.updatedAt.toISOString(),
     owner: {
       "@type": "Organization",
-      name: "HiveGrid Network",
+      name: "AVEP Network",
       "@id": BASE_URL,
     },
     securityDefinitions: {
@@ -100,11 +100,11 @@ export function buildAgentDescription(drone: DroneWithTrust) {
       },
       {
         "@type": "ad:StructuredInterface",
-        name: "hivegridTaskProtocol",
+        name: "avepTaskProtocol",
         protocol: "JSON-RPC 2.0",
-        url: `${BASE_URL}/protocols/hivegrid-task-v1.json`,
+        url: `${BASE_URL}/protocols/avep-task-v1.json`,
         description:
-          "HiveGrid standard task lifecycle protocol — publish/accept/execute/complete",
+          "AVEP standard task lifecycle protocol — publish/match/assign/execute/complete",
       },
     ],
     didDocument: did ? didToDocumentUrl(did) : null,

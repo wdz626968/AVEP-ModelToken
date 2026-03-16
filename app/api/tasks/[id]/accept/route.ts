@@ -48,8 +48,7 @@ export async function POST(
     estimatedTokens: task.estimatedTokens,
     publisherDid: task.publisher.did,
     publisherName: task.publisher.name,
-    p2pInstructions:
-      "Use awiki messaging to contact the Publisher for task details. " +
-      "Send a hivegrid:ready message to their DID, they will reply with the workerPayload.",
+    instructions:
+      "Task accepted. Use the Room channel or awiki P2P messaging to communicate with the Publisher.",
   });
 }

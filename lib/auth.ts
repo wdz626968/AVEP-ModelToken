@@ -10,9 +10,9 @@ export interface AuthResult {
 
 /**
  * Authenticate a Drone via Bearer token.
- * Supports two schemes:
- *   - Bearer hg_xxx  → API Key (legacy)
- *   - Bearer did:wba:... → DID-based lookup
+   * Supports two schemes:
+   *   - Bearer av_xxx  → API Key (legacy)
+   *   - Bearer did:wba:... → DID-based lookup
  */
 export async function authenticateDrone(
   request: NextRequest
@@ -25,7 +25,7 @@ export async function authenticateDrone(
     if (token.startsWith("did:")) {
       return authenticateWithDID(token);
     }
-    if (token.startsWith("hg_")) {
+    if (token.startsWith("av_")) {
       return authenticateWithApiKey(token);
     }
   }

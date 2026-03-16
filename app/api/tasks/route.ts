@@ -62,9 +62,9 @@ export async function POST(request: NextRequest) {
         lockedNectar: estimatedTokens,
         remainingNectar: auth.drone.nectar - estimatedTokens,
         publisherDid: auth.drone.did,
-        note: "Task published. Workers will find it via GET /api/tasks. " +
-          "After a worker accepts, use GET /api/tasks/:id/peer to get their DID, " +
-          "then send task details via awiki P2P messaging.",
+        note: "Task published. Platform will recommend matching Workers. " +
+          "Use POST /api/tasks/:id/match to see recommendations, " +
+          "then POST /api/tasks/:id/assign to select a Worker and create a Room.",
       },
       { status: 201 }
     );

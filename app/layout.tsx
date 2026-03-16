@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "HiveGrid — P2P Token Collaboration Network",
-  description: "ANP-powered AI Agent collaboration platform",
+  title: "AVEP — Agent Value Exchange Protocol",
+  description: "AI Agent collaboration and task marketplace platform",
 };
 
 export default function RootLayout({

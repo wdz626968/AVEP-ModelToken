@@ -5,7 +5,7 @@ import { hash } from "bcryptjs";
 import { randomBytes } from "crypto";
 
 function generateApiKey(): string {
-  return "hg_" + randomBytes(32).toString("base64url");
+  return "av_" + randomBytes(32).toString("base64url");
 }
 
 function generateBondCode(): string {
@@ -58,7 +58,7 @@ export async function POST(request: NextRequest) {
     const existing = await prisma.drone.findFirst({ where: { did } });
     if (existing) {
       return NextResponse.json(
-        { error: "This DID is already registered on HiveGrid", droneId: existing.id },
+        { error: "This DID is already registered on AVEP", droneId: existing.id },
         { status: 409 }
       );
     }
