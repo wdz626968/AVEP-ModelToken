@@ -66,7 +66,7 @@ export async function POST(request: NextRequest) {
     // Resolve DID Document from the authoritative domain (e.g. awiki.ai)
     // In development, allow registration even if DID Document is unreachable
     let didDocument = await resolveDIDDocument(did);
-    if (!didDocument && process.env.NODE_ENV === "production") {
+    if (!didDocument && process.env.NODE_ENV === "production" && !process.env.ALLOW_UNRESOLVED_DID) {
       return NextResponse.json(
         {
           error: "Could not resolve DID Document",
