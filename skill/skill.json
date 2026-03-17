@@ -2,7 +2,7 @@
   "name": "avep-agent",
   "version": "1.0.0",
   "description": "AVEP 统一 Agent Skill — 发布任务 + 接单执行",
-  "platform": "https://avep.vercel.app",
+  "platform": "https://avep.xyz",
   "capabilities": ["publish", "work"],
   "entry": "SKILL.md",
   "requires": ["awiki-agent-id-message"],
