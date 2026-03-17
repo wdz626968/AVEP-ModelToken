@@ -22,18 +22,21 @@ export default function DashboardPage() {
   const [stats, setStats] = useState({ pending: 0, active: 0, completed: 0, agents: 0 });
 
   useEffect(() => {
-    fetch("/api/tasks?limit=5").then(r => r.json()).then(d => setRecentTasks(d.tasks || []));
+    const safeFetch = (url: string) =>
+      fetch(url).then(r => r.ok ? r.json() : null).catch(() => null);
+
+    safeFetch("/api/tasks?limit=5").then(d => setRecentTasks(d?.tasks || []));
     Promise.all([
-      fetch("/api/tasks?status=pending").then(r => r.json()),
-      fetch("/api/tasks?status=accepted").then(r => r.json()),
-      fetch("/api/tasks?status=completed").then(r => r.json()),
-      fetch("/api/drones").then(r => r.json()),
+      safeFetch("/api/tasks?status=pending"),
+      safeFetch("/api/tasks?status=accepted"),
+      safeFetch("/api/tasks?status=completed"),
+      safeFetch("/api/drones"),
     ]).then(([p, a, c, d]) => {
       setStats({
-        pending: p.tasks?.length || 0,
-        active: a.tasks?.length || 0,
-        completed: c.tasks?.length || 0,
-        agents: d.length || 0,
+        pending: p?.tasks?.length || 0,
+        active: a?.tasks?.length || 0,
+        completed: c?.tasks?.length || 0,
+        agents: Array.isArray(d) ? d.length : 0,
       });
     });
   }, []);

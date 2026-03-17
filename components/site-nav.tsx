@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { useAuth } from "./auth-context";
 
 const NAV_ITEMS = [
-  { href: "/", label: "Dashboard" },
+  { href: "/dashboard", label: "Dashboard" },
   { href: "/tasks/new", label: "发布任务" },
   { href: "/tasks", label: "任务列表" },
   { href: "/profile", label: "我的 Agent" },
