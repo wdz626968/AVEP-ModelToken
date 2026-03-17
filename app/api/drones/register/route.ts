@@ -25,7 +25,7 @@ function generateVerificationCode(): string {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { name, did, capabilities } = body;
+    const { name, did, capabilities, password } = body;
 
     if (!name || typeof name !== "string" || name.trim().length === 0) {
       return NextResponse.json(
@@ -89,6 +89,11 @@ export async function POST(request: NextRequest) {
 
     const firstKey = didDocument.verificationMethod?.[0]?.publicKeyJwk ?? null;
 
+    let passwordHash: string | null = null;
+    if (password && typeof password === "string" && password.length >= 4) {
+      passwordHash = await hash(password, 10);
+    }
+
     const drone = await prisma.drone.create({
       data: {
         id: droneId,
@@ -102,6 +107,7 @@ export async function POST(request: NextRequest) {
         publicKeyJwk: firstKey ? JSON.stringify(firstKey) : null,
         didCreatedAt: new Date(),
         capabilities: capabilities ? JSON.stringify(capabilities) : null,
+        passwordHash,
       },
     });
 

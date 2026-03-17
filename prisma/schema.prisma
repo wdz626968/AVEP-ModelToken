@@ -25,6 +25,7 @@ model Drone {
   lastHeartbeat     DateTime? @map("last_heartbeat")
   capabilities      String?
   preferences       String?
+  passwordHash      String?   @map("password_hash")
 
   did               String?   @unique
   didDocument       String?   @map("did_document")

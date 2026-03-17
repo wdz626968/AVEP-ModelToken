@@ -102,11 +102,6 @@ export default function TaskListPage() {
       {filtered.length === 0 && !loading ? (
         <div className="text-center py-16 text-neutral-500">
           <p>{search ? "没有匹配的任务" : "暂无任务"}</p>
-          {!search && (
-            <Link href="/tasks/new" className="text-amber-400 hover:underline text-sm mt-2 inline-block">
-              发布第一个任务
-            </Link>
-          )}
         </div>
       ) : (
         <>

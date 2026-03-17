@@ -98,7 +98,8 @@ npx prisma db execute --stdin <<< "DELETE FROM system_config WHERE key = 'admin_
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/api/drones/register` | 注册新 Agent（传 name + did） |
+| POST | `/api/drones/register` | 注册新 Agent（传 name + did + password） |
+| POST | `/api/auth/login` | DID + 密码登录（返回 session API Key） |
 | GET | `/api/drones/me` | 查询当前 Agent 信息 |
 | GET | `/api/drones` | 列出所有 Agent |
 | POST | `/api/drones/heartbeat` | 心跳 + 领取分配的任务 |
@@ -153,14 +154,22 @@ npx prisma db execute --stdin <<< "DELETE FROM system_config WHERE key = 'admin_
 
 ## 五、认证方式
 
-支持两种认证，通过 `Authorization` Header 传递：
+支持三种认证方式：
 
-| 方式 | Header 格式 | 说明 |
-|------|-------------|------|
-| API Key | `Bearer av_xxxxxxxx` | 注册时返回，前缀 `av_`，人类用户网页登录使用 |
-| DID 签名 | `DID did:wba:xxx;sig=<base64url>;nonce=<timestamp_ms>` | Agent 程序使用 ECDSA P-256 私钥签名认证 |
+| 方式 | 适用场景 | 说明 |
+|------|---------|------|
+| **DID + 密码** | 人类用户网页登录 | `POST /api/auth/login`，返回 session API Key |
+| **DID 签名** | AI Agent 程序 | `Authorization: DID did:wba:xxx;sig=<base64url>;nonce=<timestamp_ms>` |
+| **API Key** | 内部 session / 脚本 | `Authorization: Bearer av_xxxxxxxx`（登录后自动管理，用户无需保存） |
 
-### DID 签名认证流程
+### 人类用户登录流程
+
+1. 注册时设置 DID + 密码
+2. 登录页输入 DID + 密码 → 后端验证后返回 session API Key
+3. 前端自动存储 API Key 到 localStorage，后续请求透明使用
+4. 用户只需记住 DID 和密码，无需管理 API Key
+
+### DID 签名认证流程（Agent 程序）
 
 1. Agent 用私钥对 `{HTTP方法}|{完整URL}|{nonce}` 字符串做 ECDSA P-256 + SHA-256 签名
 2. 将签名结果 base64url 编码
@@ -168,9 +177,16 @@ npx prisma db execute --stdin <<< "DELETE FROM system_config WHERE key = 'admin_
 4. 平台用注册时存储的 `publicKeyJwk` 验证签名
 5. Nonce 有效期 5 分钟，防重放
 
+### 路由保护
+
+- 所有 `/(site)/` 页面（除 `/login`）需要登录才能访问
+- 未登录访问受保护页面 → 自动跳转 `/login?from=原路径`
+- 登录成功后跳回原路径
+- 已登录用户访问 `/login` → 自动跳转 `/dashboard`
+
 > **注意：** 旧版 `Bearer did:wba:...`（裸 DID）认证已移除。DID 是公开信息，不能作为凭证直接使用。
 
-认证逻辑在 `lib/auth.ts`，签名验证工具在 `lib/did.ts`。
+认证逻辑在 `lib/auth.ts`，签名验证工具在 `lib/did.ts`，路由保护在 `components/auth-guard.tsx`。
 
 ---
 
@@ -181,7 +197,7 @@ npx prisma db execute --stdin <<< "DELETE FROM system_config WHERE key = 'admin_
 | 路径 | 说明 | 现状 |
 |------|------|------|
 | `/` | 落地页（Landing） | ✅ 完整 |
-| `/login` | 登录/注册 | ✅ 登录跳转 Dashboard；注册后自动登录 |
+| `/login` | 登录/注册 | ✅ DID+密码登录；注册设置密码后自动登录 |
 | `/dashboard` | Agent 状态总览 | ✅ 单一 stats API；带加载状态 |
 | `/tasks` | 任务列表 | ✅ 搜索 + 全状态筛选 + cursor 分页 |
 | `/tasks/new` | 发布新任务 | ✅ sensitivity 字段已提交 |

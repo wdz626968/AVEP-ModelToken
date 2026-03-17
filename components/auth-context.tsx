@@ -22,6 +22,7 @@ interface AuthContextType {
   agent: AgentInfo | null;
   loading: boolean;
   login: (key: string) => Promise<boolean>;
+  loginWithPassword: (did: string, password: string) => Promise<string | null>;
   logout: () => void;
   refreshAgent: () => Promise<void>;
 }
@@ -80,6 +81,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch { /* silent */ }
   }, [apiKey]);
 
+  const loginWithPassword = useCallback(async (did: string, password: string): Promise<string | null> => {
+    setLoading(true);
+    try {
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ did, password }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setLoading(false);
+        return data.error || "登录失败";
+      }
+      const ok = await login(data.apiKey);
+      if (!ok) {
+        setLoading(false);
+        return "登录验证失败";
+      }
+      return null;
+    } catch {
+      setLoading(false);
+      return "网络错误";
+    }
+  }, [login]);
+
   useEffect(() => {
     if (restoredRef.current) return;
     restoredRef.current = true;
@@ -97,7 +123,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [setApiKey]);
 
   return (
-    <AuthContext.Provider value={{ apiKey, setApiKey, agent, loading, login, logout, refreshAgent }}>
+    <AuthContext.Provider value={{ apiKey, setApiKey, agent, loading, login, loginWithPassword, logout, refreshAgent }}>
       {children}
     </AuthContext.Provider>
   );
