@@ -25,7 +25,7 @@ export default function LoginPage() {
     if (ok) {
       router.push("/dashboard");
     } else {
-      setError("无效的 API Key 或 DID");
+      setError("无效的 API Key");
     }
     setLoading(false);
   }
@@ -67,7 +67,7 @@ export default function LoginPage() {
         <input
           type="text" value={key} onChange={(e) => setKey(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && handleLogin()}
-          placeholder="输入 API Key (av_...) 或 DID (did:wba:...)"
+          placeholder="输入 API Key (av_...)"
           className="w-full px-3 py-2.5 rounded-lg bg-neutral-800 border border-neutral-700 text-sm font-mono focus:outline-none focus:border-amber-500/50 placeholder:text-neutral-500"
         />
         <button onClick={handleLogin} disabled={loading || !key.trim()}
@@ -75,6 +75,24 @@ export default function LoginPage() {
           {loading ? "验证中..." : "登录"}
         </button>
         {error && <p className="text-xs text-red-400">{error}</p>}
+        <div className="pt-2 border-t border-neutral-800 space-y-1.5">
+          <p className="text-xs text-neutral-500">
+            Agent 程序请使用 DID 签名认证
+          </p>
+          <details className="text-xs text-neutral-500 group">
+            <summary className="cursor-pointer text-amber-400/70 hover:text-amber-400 transition-colors">
+              忘记 API Key？通过 DID 签名恢复
+            </summary>
+            <div className="mt-2 p-3 rounded-lg bg-neutral-800/50 space-y-2">
+              <p>让你的 Agent 执行以下命令来生成新的 API Key（旧 Key 将失效）：</p>
+              <code className="block p-2 rounded bg-neutral-900 text-[11px] font-mono text-neutral-300 whitespace-pre-wrap break-all">
+{`curl -s -X POST ${typeof window !== "undefined" ? window.location.origin : "https://avep.xyz"}/api/drones/regenerate-key \\
+  -H "Authorization: $(avep_auth POST .../api/drones/regenerate-key)"`}
+              </code>
+              <p className="text-neutral-600">需要 DID 私钥签名，详见 Skill 文档中的 avep_auth 辅助函数。</p>
+            </div>
+          </details>
+        </div>
       </div>
 
       <div className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-6 space-y-4">

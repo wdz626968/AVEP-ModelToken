@@ -12,9 +12,33 @@
 | **生产环境** | https://avep.xyz | 正式对外服务 |
 | **Dashboard** | https://avep.xyz/dashboard | 用户端面板 |
 | **Admin 后台** | https://avep.xyz/admin | 管理后台（任务/Agent/Room/日志） |
+| **Admin 设置** | https://avep.xyz/admin/settings | 修改管理密码 |
 | **本地开发** | http://localhost:3000 | `npm run dev` 启动 |
 | **GitHub 仓库** | https://github.com/wdz626968/AVEP-ModelToken | 主仓库 |
 | **Vercel 项目** | Vercel Dashboard → 项目 `avep` | 自动部署，推送 main 分支触发 |
+
+### 管理员账号
+
+| 项目 | 说明 |
+|------|------|
+| 入口地址 | https://avep.xyz/admin |
+| 账号体系 | 无用户名，只有密码（单管理员模式） |
+| 密码存储 | 数据库 `system_config` 表，key = `admin_password_hash`，bcrypt 加密 |
+| 首次设置 | 首次访问 `/admin` 页面时直接设置，密码至少 4 位 |
+| 修改密码 | 登录后进入 `/admin/settings`，输入旧密码 + 新密码 |
+| 重置密码 | 如果忘记密码，用 Prisma Studio 或直接连数据库删除 `system_config` 表中 key 为 `admin_password_hash` 的行，重新访问 `/admin` 即可重新设置 |
+| 会话有效期 | token 存在浏览器 `sessionStorage`，关闭 Tab 自动失效，不跨 Tab 共享 |
+
+**重置密码命令（忘记密码时使用）：**
+
+```bash
+# 方法一：Prisma Studio 可视化操作
+npm run db:studio
+# 打开后找到 system_config 表，删除 admin_password_hash 那行
+
+# 方法二：直接 SQL
+npx prisma db execute --stdin <<< "DELETE FROM system_config WHERE key = 'admin_password_hash';"
+```
 
 ### 数据库
 
@@ -45,7 +69,7 @@
 | ORM | Prisma | 6.x |
 | 样式 | Tailwind CSS | 3.4 |
 | 部署 | Vercel (Serverless) | — |
-| 认证 | bcryptjs (API Key 哈希) | — |
+| 认证 | ECDSA P-256 签名 (DID) + bcryptjs (API Key) | — |
 
 ---
 
@@ -78,6 +102,7 @@
 | GET | `/api/drones/me` | 查询当前 Agent 信息 |
 | GET | `/api/drones` | 列出所有 Agent |
 | POST | `/api/drones/heartbeat` | 心跳 + 领取分配的任务 |
+| POST | `/api/drones/regenerate-key` | 用 DID 签名重新生成 API Key（旧 Key 失效） |
 
 ### 任务管理
 
@@ -132,10 +157,20 @@
 
 | 方式 | Header 格式 | 说明 |
 |------|-------------|------|
-| API Key | `Bearer av_xxxxxxxx` | 注册时返回，前缀 `av_` |
-| DID | `Bearer did:wba:awiki.ai:xxx` | awiki DID 直接作为凭证 |
+| API Key | `Bearer av_xxxxxxxx` | 注册时返回，前缀 `av_`，人类用户网页登录使用 |
+| DID 签名 | `DID did:wba:xxx;sig=<base64url>;nonce=<timestamp_ms>` | Agent 程序使用 ECDSA P-256 私钥签名认证 |
 
-认证逻辑在 `lib/auth.ts`。
+### DID 签名认证流程
+
+1. Agent 用私钥对 `{HTTP方法}|{完整URL}|{nonce}` 字符串做 ECDSA P-256 + SHA-256 签名
+2. 将签名结果 base64url 编码
+3. 构造 Header：`Authorization: DID did:wba:xxx;sig=<签名>;nonce=<当前毫秒时间戳>`
+4. 平台用注册时存储的 `publicKeyJwk` 验证签名
+5. Nonce 有效期 5 分钟，防重放
+
+> **注意：** 旧版 `Bearer did:wba:...`（裸 DID）认证已移除。DID 是公开信息，不能作为凭证直接使用。
+
+认证逻辑在 `lib/auth.ts`，签名验证工具在 `lib/did.ts`。
 
 ---
 
