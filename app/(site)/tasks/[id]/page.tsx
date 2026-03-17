@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/components/auth-context";
 
@@ -24,23 +24,12 @@ interface TaskDetail {
   completedAt: string | null;
 }
 
-interface Candidate {
-  id: string;
-  name: string;
-  did: string | null;
-  trustScore: number;
-  matchScore: number;
-}
-
 export default function TaskDetailPage() {
   const params = useParams();
-  const router = useRouter();
   const { apiKey, agent } = useAuth();
   const taskId = params.id as string;
 
   const [task, setTask] = useState<TaskDetail | null>(null);
-  const [candidates, setCandidates] = useState<Candidate[]>([]);
-  const [matchLoading, setMatchLoading] = useState(false);
   const [actionMsg, setActionMsg] = useState("");
 
   const [settleResult, setSettleResult] = useState("");
@@ -55,42 +44,6 @@ export default function TaskDetailPage() {
   }, [taskId, apiKey]);
 
   useEffect(() => { fetchTask(); }, [fetchTask]);
-
-  async function handleMatch() {
-    if (!apiKey) return;
-    setMatchLoading(true);
-    const res = await fetch(`/api/tasks/${taskId}/match`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}` },
-    });
-    if (res.ok) {
-      const data = await res.json();
-      setCandidates(data.candidates || []);
-    }
-    setMatchLoading(false);
-  }
-
-  async function handleAssign(workerId: string) {
-    if (!apiKey) return;
-    const res = await fetch(`/api/tasks/${taskId}/assign`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({ workerId, mode: "centralized" }),
-    });
-    const data = await res.json();
-    if (res.ok) {
-      setActionMsg(`已分配 Worker，Room 已创建`);
-      fetchTask();
-      if (data.roomId) {
-        setTimeout(() => router.push(`/rooms/${data.roomId}`), 1500);
-      }
-    } else {
-      setActionMsg(data.error || "分配失败");
-    }
-  }
 
   async function handleSettle() {
     if (!apiKey || !settleResult.trim() || settleTokens <= 0) return;
@@ -174,41 +127,21 @@ export default function TaskDetailPage() {
         }`}>{actionMsg}</div>
       )}
 
-      {/* Publisher: Pending → Match & Assign */}
+      {/* Publisher: Pending → Waiting for auto-assignment */}
       {isPublisher && task.status === "pending" && (
         <div className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-5 space-y-4">
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-neutral-300">Worker 匹配</h2>
-            <div className="flex gap-2">
-              <button onClick={handleMatch} disabled={matchLoading}
-                className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 text-sm font-medium disabled:opacity-40 transition-colors">
-                {matchLoading ? "匹配中..." : "获取推荐"}
-              </button>
-              <button onClick={handleCancel}
-                className="px-4 py-2 rounded-lg bg-neutral-700 hover:bg-neutral-600 text-sm transition-colors">
-                取消任务
-              </button>
+            <div>
+              <h2 className="text-sm font-semibold text-neutral-300">等待分配 Worker</h2>
+              <p className="text-xs text-neutral-500 mt-1">
+                平台暂无可用 Worker，任务已挂起。有 Worker 上线后将自动分配。
+              </p>
             </div>
+            <button onClick={handleCancel}
+              className="px-4 py-2 rounded-lg bg-neutral-700 hover:bg-neutral-600 text-sm transition-colors">
+              取消任务
+            </button>
           </div>
-          {candidates.length > 0 && (
-            <div className="space-y-2">
-              {candidates.map((c) => (
-                <div key={c.id} className="p-3 rounded-lg border border-neutral-800 bg-neutral-800/30 flex items-center justify-between">
-                  <div>
-                    <div className="font-medium text-sm">{c.name}</div>
-                    <div className="flex gap-3 text-xs text-neutral-500 mt-0.5">
-                      <span>信誉 {c.trustScore}</span>
-                      <span>匹配分 {c.matchScore}</span>
-                    </div>
-                  </div>
-                  <button onClick={() => handleAssign(c.id)}
-                    className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-xs font-medium transition-colors">
-                    选择
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
       )}
 

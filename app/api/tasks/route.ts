@@ -3,6 +3,49 @@ import { prisma } from "@/lib/prisma";
 import { authenticateDrone, unauthorizedResponse } from "@/lib/auth";
 import { lockNectar } from "@/lib/nectar";
 
+async function findBestWorker(publisherId: string, taskCategory: string | null) {
+  const candidates = await prisma.drone.findMany({
+    where: {
+      id: { not: publisherId },
+      status: { in: ["active", "unbonded"] },
+    },
+    include: { trustScore: true },
+    take: 20,
+  });
+
+  if (candidates.length === 0) return null;
+
+  const scored = candidates.map((c) => {
+    let score = 0;
+    const trust = c.trustScore;
+
+    if (trust) {
+      score += trust.overallScore * 0.3;
+      score += trust.taskCompletionRate * 20;
+      score += (1 - Math.min(trust.avgResponseMs, 60000) / 60000) * 10;
+      score += trust.uptimeRatio * 10;
+    }
+
+    if (taskCategory && c.capabilities) {
+      try {
+        const caps = JSON.parse(c.capabilities);
+        if (caps.categories?.includes(taskCategory)) score += 15;
+      } catch { /* ignore */ }
+    }
+
+    if (c.lastHeartbeat) {
+      const minutesAgo = (Date.now() - c.lastHeartbeat.getTime()) / 60000;
+      if (minutesAgo < 5) score += 10;
+      else if (minutesAgo < 30) score += 5;
+    }
+
+    return { drone: c, score };
+  });
+
+  scored.sort((a, b) => b.score - a.score);
+  return scored[0].drone;
+}
+
 export async function POST(request: NextRequest) {
   const auth = await authenticateDrone(request);
   if (!auth) return unauthorizedResponse();
@@ -39,35 +82,78 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const task = await prisma.task.create({
-      data: {
-        title,
-        description,
-        publicPayload: publicPayload ? JSON.stringify(publicPayload) : null,
-        estimatedTokens,
-        lockedNectar: estimatedTokens,
-        priority,
-        category: category || null,
-        status: "pending",
-        publisherId: auth.drone.id,
-      },
-    });
+    const bestWorker = await findBestWorker(auth.drone.id, category || null);
 
-    await lockNectar(auth.drone.id, task.id, estimatedTokens);
+    if (!bestWorker) {
+      const task = await prisma.task.create({
+        data: {
+          title, description,
+          publicPayload: publicPayload ? JSON.stringify(publicPayload) : null,
+          estimatedTokens, lockedNectar: estimatedTokens,
+          priority, category: category || null,
+          status: "pending", publisherId: auth.drone.id,
+        },
+      });
+      await lockNectar(auth.drone.id, task.id, estimatedTokens);
 
-    return NextResponse.json(
-      {
+      return NextResponse.json({
         taskId: task.id,
         status: "pending",
+        roomId: null,
+        worker: null,
         lockedNectar: estimatedTokens,
         remainingNectar: auth.drone.nectar - estimatedTokens,
-        publisherDid: auth.drone.did,
-        note: "Task published. Platform will recommend matching Workers. " +
-          "Use POST /api/tasks/:id/match to see recommendations, " +
-          "then POST /api/tasks/:id/assign to select a Worker and create a Room.",
-      },
-      { status: 201 }
-    );
+        note: "Task published but no available Worker found. Task remains pending; it will be assigned when a Worker becomes available. You can also manually assign via POST /api/tasks/:id/assign.",
+      }, { status: 201 });
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+      const task = await tx.task.create({
+        data: {
+          title, description,
+          publicPayload: publicPayload ? JSON.stringify(publicPayload) : null,
+          estimatedTokens, lockedNectar: estimatedTokens,
+          priority, category: category || null,
+          status: "accepted", publisherId: auth.drone.id,
+          workerId: bestWorker.id, acceptedAt: new Date(),
+        },
+      });
+
+      const room = await tx.room.create({
+        data: { taskId: task.id, mode: "centralized", status: "active" },
+      });
+
+      await tx.workerAssignment.create({
+        data: { taskId: task.id, workerId: bestWorker.id, status: "active" },
+      });
+
+      await tx.roomMessage.create({
+        data: {
+          roomId: room.id, senderId: auth.drone.id, type: "system",
+          content: JSON.stringify({
+            event: "worker_assigned",
+            workerId: bestWorker.id,
+            workerName: bestWorker.name,
+            mode: "centralized",
+            autoAssigned: true,
+          }),
+        },
+      });
+
+      return { task, room };
+    });
+
+    await lockNectar(auth.drone.id, result.task.id, estimatedTokens);
+
+    return NextResponse.json({
+      taskId: result.task.id,
+      status: "accepted",
+      roomId: result.room.id,
+      worker: { id: bestWorker.id, name: bestWorker.name, did: bestWorker.did },
+      lockedNectar: estimatedTokens,
+      remainingNectar: auth.drone.nectar - estimatedTokens,
+      note: "Task published and Worker auto-assigned. Room created. Send your task_payload to the Room now via POST /api/rooms/:roomId/messages.",
+    }, { status: 201 });
   } catch (error) {
     console.error("Publish task error:", error);
     return NextResponse.json(
