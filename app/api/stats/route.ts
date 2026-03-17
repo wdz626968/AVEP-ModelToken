@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
+export const dynamic = "force-dynamic";
+
 export async function GET() {
   const [pending, active, completed, agents] = await Promise.all([
     prisma.task.count({ where: { status: "pending" } }),

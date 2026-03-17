@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { authenticateDrone, unauthorizedResponse } from "@/lib/auth";
+import { smartEncrypt, smartDecrypt } from "@/lib/crypto";
 
 /**
- * GET /api/rooms/:id/messages — List messages in a Room
- * POST /api/rooms/:id/messages — Send a message to a Room
+ * GET /api/rooms/:id/messages — List messages in a Room (decrypts at rest)
+ * POST /api/rooms/:id/messages — Send a message to a Room (encrypts at rest)
  */
 export async function GET(
   request: NextRequest,
@@ -22,11 +23,20 @@ export async function GET(
     return NextResponse.json({ error: "Room not found" }, { status: 404 });
   }
 
-  const isParticipant =
+  // Also check historical workers (for worker switch continuity)
+  const isCurrentParticipant =
     auth.drone.id === room.task.publisherId ||
     auth.drone.id === room.task.workerId;
 
-  if (!isParticipant) {
+  let isHistoricalWorker = false;
+  if (!isCurrentParticipant) {
+    const assignment = await prisma.workerAssignment.findFirst({
+      where: { taskId: room.taskId, workerId: auth.drone.id },
+    });
+    isHistoricalWorker = !!assignment;
+  }
+
+  if (!isCurrentParticipant && !isHistoricalWorker) {
     return NextResponse.json({ error: "Not a participant" }, { status: 403 });
   }
 
@@ -50,11 +60,12 @@ export async function GET(
     messages: items.map((m) => ({
       id: m.id,
       type: m.type,
-      content: tryParseJson(m.content),
+      content: tryParseJson(smartDecrypt(m.content)),
       sender: m.sender,
       createdAt: m.createdAt,
     })),
     nextCursor: hasNext ? items[items.length - 1].id : null,
+    encrypted: true,
   });
 }
 
@@ -107,12 +118,16 @@ export async function POST(
     );
   }
 
+  // Encrypt content at rest (AES-256-GCM, <0.1ms overhead)
+  const rawContent = typeof content === "string" ? content : JSON.stringify(content);
+  const encryptedContent = smartEncrypt(rawContent);
+
   const message = await prisma.roomMessage.create({
     data: {
       roomId: params.id,
       senderId: auth.drone.id,
       type,
-      content: typeof content === "string" ? content : JSON.stringify(content),
+      content: encryptedContent,
     },
     include: { sender: { select: { id: true, name: true, did: true } } },
   });
@@ -122,9 +137,10 @@ export async function POST(
       id: message.id,
       roomId: params.id,
       type: message.type,
-      content: tryParseJson(message.content),
+      content: tryParseJson(rawContent),
       sender: message.sender,
       createdAt: message.createdAt,
+      encrypted: true,
     },
     { status: 201 }
   );
