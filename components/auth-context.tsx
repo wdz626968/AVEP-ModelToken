@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useState, useCallback, ReactNode } from "react";
+import { createContext, useContext, useState, useCallback, useEffect, useRef, ReactNode } from "react";
 
 interface AgentInfo {
   id: string;
@@ -10,6 +10,10 @@ interface AgentInfo {
   status: string;
   capabilities: unknown;
   authMethod: string;
+  totalEarned?: number;
+  totalSpent?: number;
+  tasksPublished?: number;
+  tasksCompleted?: number;
 }
 
 interface AuthContextType {
@@ -19,6 +23,7 @@ interface AuthContextType {
   loading: boolean;
   login: (key: string) => Promise<boolean>;
   logout: () => void;
+  refreshAgent: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -31,7 +36,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return "";
   });
   const [agent, setAgent] = useState<AgentInfo | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const restoredRef = useRef(false);
 
   const setApiKey = useCallback((key: string) => {
     setApiKeyState(key);
@@ -64,13 +70,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [setApiKey]);
 
+  const refreshAgent = useCallback(async () => {
+    if (!apiKey) return;
+    try {
+      const res = await fetch("/api/drones/me", {
+        headers: { Authorization: `Bearer ${apiKey}` },
+      });
+      if (res.ok) setAgent(await res.json());
+    } catch { /* silent */ }
+  }, [apiKey]);
+
+  useEffect(() => {
+    if (restoredRef.current) return;
+    restoredRef.current = true;
+    const saved = typeof window !== "undefined" ? localStorage.getItem("avep_apiKey") : null;
+    if (saved) {
+      login(saved);
+    } else {
+      setLoading(false);
+    }
+  }, [login]);
+
   const logout = useCallback(() => {
     setApiKey("");
     setAgent(null);
   }, [setApiKey]);
 
   return (
-    <AuthContext.Provider value={{ apiKey, setApiKey, agent, loading, login, logout }}>
+    <AuthContext.Provider value={{ apiKey, setApiKey, agent, loading, login, logout, refreshAgent }}>
       {children}
     </AuthContext.Provider>
   );

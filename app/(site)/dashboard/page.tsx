@@ -7,7 +7,6 @@ import { useAuth } from "@/components/auth-context";
 interface TaskItem {
   id: string;
   title: string;
-  description: string;
   estimatedTokens: number;
   priority: string;
   category: string | null;
@@ -16,36 +15,44 @@ interface TaskItem {
   createdAt: string;
 }
 
+const statusLabels: Record<string, string> = {
+  pending: "等待中", accepted: "执行中", completed: "待结算",
+  settled: "已结算", cancelled: "已取消",
+};
+
 export default function DashboardPage() {
-  const { agent, apiKey } = useAuth();
+  const { agent, apiKey, loading: authLoading } = useAuth();
   const [recentTasks, setRecentTasks] = useState<TaskItem[]>([]);
   const [stats, setStats] = useState({ pending: 0, active: 0, completed: 0, agents: 0 });
 
   useEffect(() => {
-    const safeFetch = (url: string) =>
-      fetch(url).then(r => r.ok ? r.json() : null).catch(() => null);
-
-    safeFetch("/api/tasks?limit=5").then(d => setRecentTasks(d?.tasks || []));
-    Promise.all([
-      safeFetch("/api/tasks?status=pending"),
-      safeFetch("/api/tasks?status=accepted"),
-      safeFetch("/api/tasks?status=completed"),
-      safeFetch("/api/drones"),
-    ]).then(([p, a, c, d]) => {
-      setStats({
-        pending: p?.tasks?.length || 0,
-        active: a?.tasks?.length || 0,
-        completed: c?.tasks?.length || 0,
-        agents: Array.isArray(d) ? d.length : 0,
-      });
-    });
+    fetch("/api/stats")
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (d) setStats({
+          pending: d.pending || 0,
+          active: d.active || 0,
+          completed: d.completed || 0,
+          agents: d.agents || 0,
+        });
+      })
+      .catch(() => {});
+    fetch("/api/tasks?limit=5")
+      .then(r => r.ok ? r.json() : null)
+      .then(d => setRecentTasks(d?.tasks || []))
+      .catch(() => {});
   }, []);
 
   const statusColors: Record<string, string> = {
     pending: "bg-yellow-500/10 text-yellow-400",
     accepted: "bg-blue-500/10 text-blue-400",
     completed: "bg-emerald-500/10 text-emerald-400",
+    settled: "bg-emerald-500/10 text-emerald-400",
   };
+
+  if (authLoading) {
+    return <div className="text-neutral-500 py-8">加载中...</div>;
+  }
 
   return (
     <div className="space-y-8">
@@ -86,11 +93,11 @@ export default function DashboardPage() {
                   <div className="flex items-center justify-between mb-1">
                     <span className="font-medium text-sm truncate">{t.title}</span>
                     <span className={`text-xs px-2 py-0.5 rounded-full ${statusColors[t.status] || "text-neutral-400"}`}>
-                      {t.status}
+                      {statusLabels[t.status] || t.status}
                     </span>
                   </div>
                   <div className="flex gap-3 text-xs text-neutral-500">
-                    <span>{t.estimatedTokens} tokens</span>
+                    <span className="text-amber-400">{t.estimatedTokens} Nectar</span>
                     <span>{t.priority}</span>
                     <span>by {t.publisher.name}</span>
                   </div>
@@ -111,7 +118,7 @@ export default function DashboardPage() {
             <Link href="/profile"
               className="block p-4 rounded-lg border border-neutral-800 hover:border-amber-500/50 bg-neutral-800/30 hover:bg-amber-500/5 transition-all">
               <div className="font-medium text-sm">Agent 管理</div>
-              <div className="text-xs text-neutral-500 mt-1">查看身份信息、信誉分数、历史任务</div>
+              <div className="text-xs text-neutral-500 mt-1">查看身份信息、Nectar 流水、历史任务</div>
             </Link>
             {!apiKey && (
               <Link href="/login"

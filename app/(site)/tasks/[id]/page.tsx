@@ -22,6 +22,7 @@ interface TaskDetail {
   createdAt: string;
   acceptedAt: string | null;
   completedAt: string | null;
+  room?: { id: string } | null;
 }
 
 export default function TaskDetailPage() {
@@ -78,11 +79,27 @@ export default function TaskDetailPage() {
   if (!task) return <div className="text-neutral-500">加载中...</div>;
 
   const isPublisher = agent?.id === task.publisher.id;
+  const isWorker = agent?.id === task.worker?.id;
+  const roomId = task.room?.id || taskId;
+
   const statusColors: Record<string, string> = {
     pending: "bg-yellow-500/10 text-yellow-400",
     accepted: "bg-blue-500/10 text-blue-400",
+    in_progress: "bg-blue-500/10 text-blue-400",
     completed: "bg-emerald-500/10 text-emerald-400",
+    settled: "bg-emerald-500/10 text-emerald-400",
     cancelled: "bg-neutral-700/50 text-neutral-400",
+    failed: "bg-red-500/10 text-red-400",
+  };
+
+  const statusLabels: Record<string, string> = {
+    pending: "等待分配",
+    accepted: "执行中",
+    in_progress: "执行中",
+    completed: "待结算",
+    settled: "已结算",
+    cancelled: "已取消",
+    failed: "失败",
   };
 
   return (
@@ -90,12 +107,14 @@ export default function TaskDetailPage() {
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-2xl font-bold">{task.title}</h1>
-          <div className="flex gap-2 mt-2">
+          <div className="flex gap-2 mt-2 flex-wrap">
             <span className={`text-xs px-2 py-0.5 rounded-full ${statusColors[task.status] || ""}`}>
-              {task.status}
+              {statusLabels[task.status] || task.status}
             </span>
             <span className="text-xs text-neutral-500">{task.priority}</span>
             {task.category && <span className="text-xs text-neutral-500">{task.category}</span>}
+            {isPublisher && <span className="text-xs text-amber-500/60">我发布的</span>}
+            {isWorker && <span className="text-xs text-blue-500/60">我执行的</span>}
           </div>
         </div>
         <div className="text-right">
@@ -109,12 +128,31 @@ export default function TaskDetailPage() {
         <div className="text-sm text-neutral-300 whitespace-pre-wrap">{task.description}</div>
       </div>
 
+      {task.worker && (
+        <div className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-5">
+          <h2 className="text-xs font-semibold text-neutral-400 uppercase mb-3">参与方</h2>
+          <div className="flex gap-8 text-sm">
+            <div>
+              <span className="text-neutral-500">Publisher: </span>
+              <span className="text-neutral-200">{task.publisher.name}</span>
+            </div>
+            <div>
+              <span className="text-neutral-500">Worker: </span>
+              <span className="text-neutral-200">{task.worker.name}</span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {task.result && (
         <div className="rounded-xl border border-emerald-800/30 bg-emerald-950/20 p-5">
           <h2 className="text-xs font-semibold text-emerald-400 uppercase mb-3">执行结果</h2>
           <div className="text-sm text-emerald-300/80 whitespace-pre-wrap">{task.result}</div>
           {task.actualTokens && (
             <div className="mt-2 text-xs text-neutral-500">实际消耗: {task.actualTokens} tokens</div>
+          )}
+          {task.rating && (
+            <div className="mt-1 text-xs text-neutral-500">评分: {"★".repeat(task.rating)}{"☆".repeat(5 - task.rating)}</div>
           )}
         </div>
       )}
@@ -127,7 +165,25 @@ export default function TaskDetailPage() {
         }`}>{actionMsg}</div>
       )}
 
-      {/* Publisher: Pending → Waiting for auto-assignment */}
+      {/* Room 入口 — Publisher 和 Worker 都可见 */}
+      {(isPublisher || isWorker) && ["accepted", "in_progress"].includes(task.status) && (
+        <div className="rounded-xl border border-blue-800/30 bg-blue-950/10 p-5">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-sm font-semibold text-blue-300">Room 协作</h2>
+              <p className="text-xs text-neutral-500 mt-1">
+                {isPublisher ? "查看 Worker 执行进度，或补充任务说明" : "查看任务详情，提交执行结果"}
+              </p>
+            </div>
+            <Link href={`/rooms/${roomId}`}
+              className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-sm font-medium transition-colors">
+              进入 Room
+            </Link>
+          </div>
+        </div>
+      )}
+
+      {/* Publisher: Pending → 等待 Worker 分配 */}
       {isPublisher && task.status === "pending" && (
         <div className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-5 space-y-4">
           <div className="flex items-center justify-between">
@@ -145,41 +201,59 @@ export default function TaskDetailPage() {
         </div>
       )}
 
-      {/* Publisher: Accepted → Go to Room or Settle */}
-      {isPublisher && task.status === "accepted" && (
+      {/* Publisher: Accepted/Completed → 可结算 */}
+      {isPublisher && ["accepted", "completed"].includes(task.status) && (
         <div className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-5 space-y-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-sm font-semibold text-neutral-300">执行中</h2>
-              <p className="text-xs text-neutral-500 mt-1">Worker: {task.worker?.name}</p>
-            </div>
-            <Link href={`/rooms/${taskId}`}
-              className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-sm font-medium transition-colors">
-              进入 Room
-            </Link>
-          </div>
-          <div className="border-t border-neutral-800 pt-4">
-            <h3 className="text-xs font-semibold text-neutral-400 uppercase mb-3">结算</h3>
-            <textarea value={settleResult} onChange={(e) => setSettleResult(e.target.value)}
-              placeholder="粘贴或输入执行结果..." rows={3}
-              className="w-full px-3 py-2 rounded-lg bg-neutral-800 border border-neutral-700 text-sm focus:outline-none focus:border-amber-500/50 placeholder:text-neutral-500 resize-none" />
-            <div className="flex gap-2 items-center mt-2">
-              <input type="number" value={settleTokens} onChange={(e) => setSettleTokens(Number(e.target.value))}
-                min={1} max={task.estimatedTokens} placeholder="实际 tokens"
-                className="w-28 px-2 py-1.5 rounded bg-neutral-800 border border-neutral-700 text-sm focus:outline-none focus:border-amber-500/50" />
-              <select value={settleRating} onChange={(e) => setSettleRating(Number(e.target.value))}
-                className="w-20 px-2 py-1.5 rounded bg-neutral-800 border border-neutral-700 text-sm focus:outline-none">
-                {[5,4,3,2,1].map(r => <option key={r} value={r}>{r} 分</option>)}
-              </select>
-              <button onClick={handleSettle}
-                disabled={!settleResult.trim() || settleTokens <= 0}
-                className="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-sm font-medium disabled:opacity-40 transition-colors">
-                确认结算
-              </button>
-            </div>
+          <h3 className="text-xs font-semibold text-neutral-400 uppercase">确认结算</h3>
+          <textarea value={settleResult} onChange={(e) => setSettleResult(e.target.value)}
+            placeholder="粘贴或输入执行结果..." rows={3}
+            className="w-full px-3 py-2 rounded-lg bg-neutral-800 border border-neutral-700 text-sm focus:outline-none focus:border-amber-500/50 placeholder:text-neutral-500 resize-none" />
+          <div className="flex gap-2 items-center">
+            <input type="number" value={settleTokens} onChange={(e) => setSettleTokens(Number(e.target.value))}
+              min={1} max={task.estimatedTokens} placeholder="实际 tokens"
+              className="w-28 px-2 py-1.5 rounded bg-neutral-800 border border-neutral-700 text-sm focus:outline-none focus:border-amber-500/50" />
+            <select value={settleRating} onChange={(e) => setSettleRating(Number(e.target.value))}
+              className="w-20 px-2 py-1.5 rounded bg-neutral-800 border border-neutral-700 text-sm focus:outline-none">
+              {[5,4,3,2,1].map(r => <option key={r} value={r}>{r} 分</option>)}
+            </select>
+            <button onClick={handleSettle}
+              disabled={!settleResult.trim() || settleTokens <= 0}
+              className="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-sm font-medium disabled:opacity-40 transition-colors">
+              确认结算
+            </button>
           </div>
         </div>
       )}
+
+      {/* Worker: Pending — 暂无操作 */}
+      {isWorker && task.status === "pending" && (
+        <div className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-5">
+          <p className="text-sm text-neutral-400">任务尚未分配，等待 Publisher 确认。</p>
+        </div>
+      )}
+
+      {/* 时间线 */}
+      <div className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-5">
+        <h2 className="text-xs font-semibold text-neutral-400 uppercase mb-3">时间线</h2>
+        <div className="space-y-2 text-xs text-neutral-500">
+          <div className="flex justify-between">
+            <span>创建时间</span>
+            <span>{new Date(task.createdAt).toLocaleString()}</span>
+          </div>
+          {task.acceptedAt && (
+            <div className="flex justify-between">
+              <span>分配时间</span>
+              <span>{new Date(task.acceptedAt).toLocaleString()}</span>
+            </div>
+          )}
+          {task.completedAt && (
+            <div className="flex justify-between">
+              <span>完成时间</span>
+              <span>{new Date(task.completedAt).toLocaleString()}</span>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

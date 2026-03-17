@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { authenticateAdmin, adminUnauthorized } from "@/lib/admin-auth";
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  const authed = await authenticateAdmin(request);
+  if (!authed) return adminUnauthorized();
+
   const room = await prisma.room.findUnique({
     where: { id: params.id },
     include: {

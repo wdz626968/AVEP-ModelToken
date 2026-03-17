@@ -35,6 +35,7 @@ export default function NewTaskPage() {
         estimatedTokens: tokens,
         category,
         priority,
+        sensitivityLevel: sensitivity,
       }),
     });
     const data = await res.json();

@@ -23,7 +23,7 @@ export default function LoginPage() {
     setError("");
     const ok = await login(key.trim());
     if (ok) {
-      router.push("/");
+      router.push("/dashboard");
     } else {
       setError("无效的 API Key 或 DID");
     }
@@ -44,6 +44,8 @@ export default function LoginPage() {
     if (res.ok) {
       setRegResult(data);
       setKey(data.apiKey);
+      const loggedIn = await login(data.apiKey);
+      if (loggedIn) router.push("/dashboard");
     } else {
       setRegError(data.error + (data.hint ? ` — ${data.hint}` : ""));
     }

@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import { useAdmin } from "@/components/admin-context";
 
 interface Message {
   id: string;
@@ -49,18 +50,19 @@ const typeLabels: Record<string, string> = {
 
 export default function AdminRoomDetailPage() {
   const params = useParams();
+  const { adminFetch } = useAdmin();
   const roomId = params.id as string;
   const [room, setRoom] = useState<RoomDetail | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    Promise.all([
-      fetch(`/api/admin/rooms/${roomId}`).then((r) => (r.ok ? r.json() : null)),
-    ]).then(([data]) => {
-      setRoom(data);
-      setLoading(false);
-    });
-  }, [roomId]);
+    adminFetch(`/api/admin/rooms/${roomId}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        setRoom(data);
+        setLoading(false);
+      });
+  }, [roomId, adminFetch]);
 
   if (loading) return <div className="text-neutral-500">加载中...</div>;
   if (!room) return <div className="text-red-400">Room 不存在</div>;
@@ -80,9 +82,9 @@ export default function AdminRoomDetailPage() {
             room.status === "active" ? "bg-emerald-500/10 text-emerald-400" : "bg-neutral-700/50 text-neutral-400"
           }`}>{room.status}</span>
         </div>
-        <div className="flex gap-6 text-sm text-neutral-400">
+        <div className="flex gap-6 text-sm text-neutral-400 flex-wrap">
           <span>Publisher: <span className="text-neutral-200">{room.task.publisher.name}</span></span>
-          <span>Worker: <span className="text-neutral-200">{room.task.worker?.name || "-"}</span></span>
+          <span>Worker: <span className="text-neutral-200">{room.task.worker?.name || "—"}</span></span>
           <span>任务状态: <span className="text-amber-400">{room.task.status}</span></span>
           <span>预算: <span className="text-amber-400">{room.task.estimatedTokens} Nectar</span></span>
         </div>

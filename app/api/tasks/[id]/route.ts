@@ -11,6 +11,7 @@ export async function GET(
     include: {
       publisher: { select: { id: true, name: true, did: true } },
       worker: { select: { id: true, name: true, did: true } },
+      room: { select: { id: true, status: true } },
     },
   });
 
@@ -43,6 +44,7 @@ export async function GET(
     response.workerPayload = task.workerPayload
       ? JSON.parse(task.workerPayload)
       : null;
+    response.room = task.room;
   }
 
   if (isPublisher) {

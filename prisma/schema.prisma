@@ -179,3 +179,13 @@ model WorkerAssignment {
   @@index([taskId, status])
   @@map("worker_assignments")
 }
+
+// ── 系统配置 ──
+
+model SystemConfig {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("system_config")
+}

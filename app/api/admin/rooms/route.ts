@@ -1,7 +1,11 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { authenticateAdmin, adminUnauthorized } from "@/lib/admin-auth";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const authed = await authenticateAdmin(request);
+  if (!authed) return adminUnauthorized();
+
   const rooms = await prisma.room.findMany({
     include: {
       task: {
