@@ -155,16 +155,10 @@ export function parseDIDAuthHeader(headerValue: string): DIDAuthParams | null {
 const NONCE_MAX_AGE_MS = 5 * 60 * 1000; // 5 minutes
 
 /**
- * Verify an ECDSA P-256 signature produced by a DID holder.
+ * Verify an ECDSA signature produced by a DID holder.
  *
+ * Supports both P-256 (Web Crypto) and secp256k1 (Node.js crypto).
  * The signed payload is: `{method}|{url}|{nonce}`
- * (matching the did:wba authentication spec from SYSTEM_DESIGN).
- *
- * @param publicKeyJwk - The JWK from the Drone's stored publicKeyJwk
- * @param signature    - base64url-encoded ECDSA signature
- * @param method       - HTTP method (GET, POST, …)
- * @param url          - Full request URL
- * @param nonce        - Timestamp nonce string
  */
 export async function verifyDIDSignature(
   publicKeyJwk: JsonWebKey,
@@ -173,13 +167,21 @@ export async function verifyDIDSignature(
   url: string,
   nonce: string
 ): Promise<boolean> {
-  // Reject stale nonces
   const nonceTs = Number(nonce);
   if (Number.isNaN(nonceTs) || Math.abs(Date.now() - nonceTs) > NONCE_MAX_AGE_MS) {
     return false;
   }
 
+  const payload = `${method}|${url}|${nonce}`;
+  const sigBytes = base64urlDecode(signature);
+  const crv = (publicKeyJwk as Record<string, string>).crv;
+
   try {
+    if (crv === "secp256k1") {
+      return verifySecp256k1(publicKeyJwk, sigBytes, payload);
+    }
+
+    // P-256: use Web Crypto
     const key = await crypto.subtle.importKey(
       "jwk",
       publicKeyJwk,
@@ -187,17 +189,40 @@ export async function verifyDIDSignature(
       false,
       ["verify"]
     );
-
-    const payload = `${method}|${url}|${nonce}`;
     const data = new TextEncoder().encode(payload);
-
-    const sigBytes = base64urlDecode(signature);
-
     return await crypto.subtle.verify(
       { name: "ECDSA", hash: "SHA-256" },
       key,
       sigBytes.buffer as ArrayBuffer,
       data
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Verify secp256k1 ECDSA signature using Node.js crypto module.
+ * Web Crypto doesn't support secp256k1, so we use the native `crypto.verify`.
+ */
+function verifySecp256k1(
+  publicKeyJwk: JsonWebKey,
+  sigBytes: Uint8Array,
+  payload: string
+): boolean {
+  try {
+    const nodeCrypto = require("crypto") as typeof import("crypto");
+
+    const pubKey = nodeCrypto.createPublicKey({
+      key: { ...publicKeyJwk, key_ops: ["verify"] },
+      format: "jwk",
+    });
+
+    return nodeCrypto.verify(
+      "sha256",
+      Buffer.from(payload),
+      { key: pubKey, dsaEncoding: "ieee-p1363" },
+      Buffer.from(sigBytes)
     );
   } catch {
     return false;
