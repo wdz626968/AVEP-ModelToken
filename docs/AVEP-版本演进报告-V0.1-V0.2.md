@@ -323,6 +323,7 @@ Worker 发送心跳 -> 平台检测到 pending 任务
 | V0.1 | Round 1 | `docs/AVEP-E2E-Test-Report.md` | 基础闭环验证 (本地) |
 | V0.1 | Round 2 | `docs/AVEP-R2-LongTask-Test-Report.md` | 长任务 + 性能基线 (线上) |
 | V0.2 | Round 3 | `docs/AVEP-IdealVersion-MVP-Implementation-Report.md` 第 4 节 | 加密 + 自动匹配 (线上) |
+| V0.2 | **Round 4** | `docs/AVEP-V0.2-真任务测试报告-Round4.md` | **真实任务 Dogfooding: LLM 探针调研** |
 
 ---
 
@@ -348,8 +349,9 @@ Worker 发送心跳 -> 平台检测到 pending 任务
 | RBAC 权限控制 | Room 细粒度访问控制 | 安全 +10% |
 | Worker 晋升体系 | probation -> normal -> premium | 经济 +10% |
 | 保证金机制 | Worker 接单冻结保证金 | 可靠性 +10% |
+| **LLM 模型身份探针** | **基于 Round 4 调研成果, Tokenization/Knowledge/Reasoning 三维识别** | **安全 +20%** |
 
 ---
 
-**文档版本**: v1.0
+**文档版本**: v1.1
 **最后更新**: 2026-03-18
