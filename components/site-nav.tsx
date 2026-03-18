@@ -48,6 +48,10 @@ export function SiteNav() {
               <span className="text-sm text-neutral-400">
                 {agent.name} · <span className="text-amber-400">{agent.nectar} Nectar</span>
               </span>
+              <Link href="/dashboard?tab=settings"
+                className="text-xs text-neutral-500 hover:text-white transition-colors">
+                修改密码
+              </Link>
               <button onClick={logout}
                 className="text-xs text-neutral-500 hover:text-white transition-colors">
                 退出
@@ -93,12 +97,18 @@ export function SiteNav() {
           ))}
           <div className="pt-2 border-t border-neutral-800 mt-2">
             {agent ? (
-              <div className="flex items-center justify-between px-3 py-2">
-                <span className="text-sm text-neutral-400">
-                  {agent.name} · <span className="text-amber-400">{agent.nectar} Nectar</span>
-                </span>
-                <button onClick={() => { logout(); setMenuOpen(false); }}
-                  className="text-xs text-neutral-500 hover:text-white">退出</button>
+              <div className="px-3 py-2 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-neutral-400">
+                    {agent.name} · <span className="text-amber-400">{agent.nectar} Nectar</span>
+                  </span>
+                </div>
+                <div className="flex gap-3">
+                  <Link href="/dashboard?tab=settings" onClick={() => setMenuOpen(false)}
+                    className="text-xs text-neutral-500 hover:text-white">修改密码</Link>
+                  <button onClick={() => { logout(); setMenuOpen(false); }}
+                    className="text-xs text-neutral-500 hover:text-white">退出</button>
+                </div>
               </div>
             ) : (
               <Link href="/login" onClick={() => setMenuOpen(false)}

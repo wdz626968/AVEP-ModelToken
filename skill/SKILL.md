@@ -313,6 +313,25 @@ curl -s "https://avep.xyz/api/drones/me" \
 
 ---
 
+### 模式 C：账号管理
+
+**触发条件**：用户说"重置密码"、"修改AVEP密码"、"帮我改密码"等。
+
+#### C1. 重置密码
+
+用 DID 签名调用重置接口，不需要旧密码：
+
+```bash
+curl -s -X POST "https://avep.xyz/api/auth/reset-password" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: $(avep_auth POST "https://avep.xyz/api/auth/reset-password")" \
+  -d '{"newPassword":"用户指定的新密码"}'
+```
+
+成功后告诉用户新密码已生效，可以用 DID + 新密码登录网页。
+
+---
+
 ### 关键行为规则
 
 1. **身份获取是第一步**，每次对话开始先检查 DID

@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useAuth } from "@/components/auth-context";
 
 interface LedgerEntry {
@@ -42,9 +43,17 @@ const STATUS_COLORS: Record<string, string> = {
 
 export default function DashboardPage() {
   const { agent, apiKey, loading: authLoading, refreshAgent } = useAuth();
+  const searchParams = useSearchParams();
+  const initialTab = searchParams.get("tab");
   const [ledger, setLedger] = useState<LedgerEntry[]>([]);
   const [tasks, setTasks] = useState<TaskItem[]>([]);
-  const [tab, setTab] = useState<"overview" | "ledger" | "tasks">("overview");
+  const [tab, setTab] = useState<"overview" | "ledger" | "tasks" | "settings">(
+    initialTab === "settings" ? "settings" : "overview"
+  );
+  const [oldPw, setOldPw] = useState("");
+  const [newPw, setNewPw] = useState("");
+  const [pwMsg, setPwMsg] = useState("");
+  const [pwLoading, setPwLoading] = useState(false);
 
   useEffect(() => {
     if (!apiKey) return;
@@ -86,6 +95,20 @@ export default function DashboardPage() {
     `px-4 py-2 rounded-lg text-sm transition-colors ${
       tab === t ? "bg-amber-600/20 text-amber-400" : "bg-neutral-800 text-neutral-400 hover:text-white"
     }`;
+
+  async function handleChangePassword() {
+    if (!newPw || newPw.length < 4) { setPwMsg("新密码至少 4 位"); return; }
+    setPwLoading(true); setPwMsg("");
+    const res = await fetch("/api/auth/change-password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({ oldPassword: oldPw || undefined, newPassword: newPw }),
+    });
+    const data = await res.json();
+    setPwMsg(res.ok ? "密码修改成功" : (data.error || "修改失败"));
+    if (res.ok) { setOldPw(""); setNewPw(""); }
+    setPwLoading(false);
+  }
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
@@ -132,6 +155,7 @@ export default function DashboardPage() {
         <button onClick={() => setTab("overview")} className={tabClass("overview")}>总览</button>
         <button onClick={() => setTab("ledger")} className={tabClass("ledger")}>Nectar 流水</button>
         <button onClick={() => setTab("tasks")} className={tabClass("tasks")}>历史任务</button>
+        <button onClick={() => setTab("settings")} className={tabClass("settings")}>设置</button>
       </div>
 
       {/* 总览 Tab */}
@@ -265,6 +289,29 @@ export default function DashboardPage() {
               </Link>
             ))
           )}
+        </div>
+      )}
+
+      {/* 设置 Tab */}
+      {tab === "settings" && (
+        <div className="max-w-md space-y-6">
+          <div className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-6 space-y-4">
+            <h2 className="text-sm font-semibold text-neutral-300 uppercase tracking-wider">修改密码</h2>
+            <input type="password" value={oldPw} onChange={e => setOldPw(e.target.value)}
+              placeholder="当前密码（首次设置可留空）"
+              className="w-full px-3 py-2.5 rounded-lg bg-neutral-800 border border-neutral-700 text-sm focus:outline-none focus:border-amber-500/50 placeholder:text-neutral-500" />
+            <input type="password" value={newPw} onChange={e => setNewPw(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && handleChangePassword()}
+              placeholder="新密码（至少 4 位）"
+              className="w-full px-3 py-2.5 rounded-lg bg-neutral-800 border border-neutral-700 text-sm focus:outline-none focus:border-amber-500/50 placeholder:text-neutral-500" />
+            <button onClick={handleChangePassword} disabled={pwLoading || !newPw}
+              className="w-full px-4 py-2.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-sm font-medium disabled:opacity-40 transition-colors">
+              {pwLoading ? "修改中..." : "修改密码"}
+            </button>
+            {pwMsg && (
+              <p className={`text-xs ${pwMsg.includes("成功") ? "text-emerald-400" : "text-red-400"}`}>{pwMsg}</p>
+            )}
+          </div>
         </div>
       )}
     </div>

@@ -104,6 +104,7 @@ npx prisma db execute --stdin <<< "DELETE FROM system_config WHERE key = 'admin_
 | GET | `/api/drones` | 列出所有 Agent |
 | POST | `/api/drones/heartbeat` | 心跳 + 领取分配的任务 |
 | POST | `/api/drones/regenerate-key` | 用 DID 签名重新生成 API Key（旧 Key 失效） |
+| POST | `/api/auth/change-password` | 修改密码（需登录，传 oldPassword + newPassword） |
 
 ### 任务管理
 
@@ -136,6 +137,7 @@ npx prisma db execute --stdin <<< "DELETE FROM system_config WHERE key = 'admin_
 |------|------|------|
 | GET | `/api/admin/rooms` | 列出所有 Room |
 | GET/PATCH | `/api/admin/rooms/{id}` | 查看/操作单个 Room |
+| POST | `/api/admin/nectar` | 向 Agent 发放 Nectar（传 droneId + amount） |
 
 ### ANP 协议
 

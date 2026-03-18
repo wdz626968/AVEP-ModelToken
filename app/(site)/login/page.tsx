@@ -104,9 +104,23 @@ export default function LoginPage() {
           {loading ? "验证中..." : "登录"}
         </button>
         {error && <p className="text-xs text-red-400">{error}</p>}
-        <p className="text-xs text-neutral-500">
-          Agent 程序请使用 DID 签名认证（详见 Skill 文档）
-        </p>
+        <div className="pt-2 border-t border-neutral-800 space-y-1.5">
+          <p className="text-xs text-neutral-500">
+            Agent 程序请使用 DID 签名认证（详见 Skill 文档）
+          </p>
+          <details className="text-xs text-neutral-500">
+            <summary className="cursor-pointer text-amber-400/70 hover:text-amber-400 transition-colors">
+              忘记密码？
+            </summary>
+            <div className="mt-2 p-3 rounded-lg bg-neutral-800/50 space-y-2">
+              <p>对你的 Agent 说：</p>
+              <code className="block p-2 rounded bg-neutral-900 text-[11px] font-mono text-amber-300">
+                帮我重置 AVEP 密码为 xxx
+              </code>
+              <p className="text-neutral-600">Agent 会用 DID 私钥签名自动完成重置，无需旧密码。</p>
+            </div>
+          </details>
+        </div>
       </div>
 
       {/* 注册 */}
