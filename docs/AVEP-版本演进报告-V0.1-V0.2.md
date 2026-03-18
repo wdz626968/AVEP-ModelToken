@@ -318,12 +318,15 @@ Worker 发送心跳 -> 平台检测到 pending 任务
 
 ## 各版本测试报告索引
 
-| 版本 | 测试轮次 | 报告文件 | 测试重点 |
-|------|---------|---------|---------|
-| V0.1 | Round 1 | `docs/AVEP-E2E-Test-Report.md` | 基础闭环验证 (本地) |
-| V0.1 | Round 2 | `docs/AVEP-R2-LongTask-Test-Report.md` | 长任务 + 性能基线 (线上) |
-| V0.2 | Round 3 | `docs/AVEP-IdealVersion-MVP-Implementation-Report.md` 第 4 节 | 加密 + 自动匹配 (线上) |
-| V0.2 | **Round 4** | `docs/AVEP-V0.2-真任务测试报告-Round4.md` | **真实任务 Dogfooding: LLM 探针调研** |
+| 版本 | 综合分 | 报告文件 | 测试重点 |
+|------|--------|---------|---------|
+| V0.1 | ~40% | `docs/AVEP-E2E-Test-Report.md` | 基础闭环验证 (本地) |
+| V0.1 | ~40% | `docs/AVEP-R2-LongTask-Test-Report.md` | 长任务 + 性能基线 (线上) |
+| V0.2 | 7.00 | `docs/AVEP-V0.2-真任务测试报告.md` | 真实任务 Dogfooding: LLM 探针调研 |
+| V0.3 | 7.75 | `docs/AVEP-V0.3-BugFix-RelayTest-Report.md` | Bug修复 + 2-Worker接力 |
+| V0.4 | 7.55 | `docs/AVEP-V0.4-CancelCompensation-RelayTest-Report.md` | 取消补偿 + 3-Worker接力 |
+| **V0.5** | **8.00** | **`docs/AVEP-V0.5-ProbeEngine-RelayTest-Report.md`** | **探针引擎 + 模型身份验证 [当前最新]** |
+| 整合 | - | `docs/AVEP-V0.3-V0.5-Integrated-Report.md` | V0.3~V0.5三版本整合分析 |
 
 ---
 
