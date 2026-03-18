@@ -43,6 +43,7 @@ model Drone {
   roomMessages      RoomMessage[]
   checkpoints       Checkpoint[]        @relation("CheckpointWorker")
   workerAssignments WorkerAssignment[]  @relation("WorkerAssignments")
+  probeResults      ProbeResult[]
 
   @@index([status, lastHeartbeat])
   @@index([did])
@@ -185,6 +186,27 @@ model WorkerAssignment {
 
   @@index([taskId, status])
   @@map("worker_assignments")
+}
+
+// ── 探针结果 ──
+
+model ProbeResult {
+  id            String   @id @default(cuid())
+  droneId       String   @map("drone_id")
+  drone         Drone    @relation(fields: [droneId], references: [id])
+  probeType     String   @map("probe_type")    // "health" | "identity_tokenization" | "identity_knowledge" | "identity_reasoning"
+  challengeData String   @map("challenge_data") // JSON: the challenge sent
+  responseData  String?  @map("response_data")  // JSON: the response received
+  expectedModel String?  @map("expected_model") // e.g. "claude-opus-4.6"
+  detectedModel String?  @map("detected_model") // e.g. "claude-family" or "gpt-family"
+  confidence    Float    @default(0.0)          // 0.0 ~ 1.0
+  passed        Boolean  @default(false)
+  responseMs    Int      @default(0) @map("response_ms")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@index([droneId, createdAt])
+  @@index([probeType])
+  @@map("probe_results")
 }
 
 // ── 系统配置 ──
