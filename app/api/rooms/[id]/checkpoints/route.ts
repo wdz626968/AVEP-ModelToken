@@ -88,11 +88,24 @@ export async function POST(
   }
 
   const body = await request.json();
-  const { progress, snapshot } = body;
+  const { snapshot } = body;
+  let { progress } = body;
 
-  if (progress === undefined || progress < 0 || progress > 1) {
+  if (progress === undefined || progress === null) {
     return NextResponse.json(
-      { error: "progress is required and must be between 0 and 1" },
+      { error: "progress is required (0-1 float or 0-100 integer)" },
+      { status: 400 }
+    );
+  }
+
+  // [R5-fix] Auto-normalize: accept 0-100 integers and convert to 0-1 float
+  if (typeof progress === "number" && progress > 1 && progress <= 100) {
+    progress = progress / 100;
+  }
+
+  if (progress < 0 || progress > 1) {
+    return NextResponse.json(
+      { error: "progress must be between 0 and 1 (or 0-100, which is auto-normalized)" },
       { status: 400 }
     );
   }

@@ -39,9 +39,18 @@ export async function POST(
   const body = await request.json();
   const { result, actualTokens, rating } = body;
 
-  if (!result || !actualTokens || actualTokens <= 0) {
+  // [R5-fix] Provide field-level error details for settle API
+  const missingFields: string[] = [];
+  if (!result) missingFields.push("result (string: settlement verdict, e.g. 'approved')");
+  if (!actualTokens || actualTokens <= 0) missingFields.push("actualTokens (number > 0: tokens earned by worker)");
+
+  if (missingFields.length > 0) {
     return NextResponse.json(
-      { error: "result and actualTokens (> 0) are required" },
+      {
+        error: "Missing required fields for settlement",
+        missingFields,
+        example: { result: "approved", actualTokens: 35, rating: 5 },
+      },
       { status: 400 }
     );
   }

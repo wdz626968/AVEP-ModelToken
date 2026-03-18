@@ -4,12 +4,17 @@ import { authenticateDrone, unauthorizedResponse } from "@/lib/auth";
 import { lockNectar } from "@/lib/nectar";
 
 async function findBestWorker(publisherId: string, taskCategory: string | null) {
+  // [R5-fix] Filter stale workers: only consider those with heartbeat within 30 minutes
+  const heartbeatCutoff = new Date(Date.now() - 30 * 60 * 1000);
+
   const candidates = await prisma.drone.findMany({
     where: {
       id: { not: publisherId },
       status: { in: ["active", "unbonded"] },
+      lastHeartbeat: { gte: heartbeatCutoff },
     },
     include: { trustScore: true },
+    orderBy: { lastHeartbeat: "desc" },
     take: 20,
   });
 
@@ -33,10 +38,12 @@ async function findBestWorker(publisherId: string, taskCategory: string | null) 
       } catch { /* ignore */ }
     }
 
+    // [R5-fix] Stronger recency bonus: prioritize most-recently-active workers
     if (c.lastHeartbeat) {
       const minutesAgo = (Date.now() - c.lastHeartbeat.getTime()) / 60000;
-      if (minutesAgo < 5) score += 10;
-      else if (minutesAgo < 30) score += 5;
+      if (minutesAgo < 2) score += 15;
+      else if (minutesAgo < 5) score += 10;
+      else if (minutesAgo < 15) score += 5;
     }
 
     return { drone: c, score };
