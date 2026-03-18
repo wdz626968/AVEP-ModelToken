@@ -176,10 +176,26 @@ export async function GET(request: NextRequest) {
   const category = searchParams.get("category");
   const limit = Math.min(parseInt(searchParams.get("limit") || "20"), 100);
   const cursor = searchParams.get("cursor");
+  const excludeExpired = searchParams.get("excludeExpired") !== "false"; // default true
 
-  const where: Record<string, unknown> = {};
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const where: Record<string, any> = {};
   if (status) where.status = status;
   if (category) where.category = category;
+
+  // [R7] Filter out stale pending tasks older than 4 hours by default
+  if (excludeExpired && (!status || status === "pending")) {
+    const expiryCutoff = new Date(Date.now() - 4 * 60 * 60 * 1000);
+    if (status === "pending") {
+      where.createdAt = { gte: expiryCutoff };
+    } else if (!status) {
+      // When listing all tasks, exclude expired pending ones
+      where.OR = [
+        { status: { not: "pending" } },
+        { status: "pending", createdAt: { gte: expiryCutoff } },
+      ];
+    }
+  }
 
   const tasks = await prisma.task.findMany({
     where,
@@ -212,5 +228,6 @@ export async function GET(request: NextRequest) {
       publicPayload: t.publicPayload ? JSON.parse(t.publicPayload) : null,
     })),
     nextCursor: hasNext ? items[items.length - 1].id : null,
+    total: items.length,
   });
 }

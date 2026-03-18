@@ -137,3 +137,70 @@ export async function refundNectar(
     return newBalance;
   });
 }
+
+/**
+ * Cancel an accepted task with partial compensation to the Worker.
+ * Worker receives compensation = lockedNectar * progress (based on latest checkpoint).
+ * Publisher gets refund of the remainder.
+ */
+export async function cancelWithCompensation(
+  taskId: string,
+  publisherId: string,
+  workerId: string,
+  lockedNectar: number,
+  progress: number // 0.0 ~ 1.0 from latest checkpoint
+) {
+  const compensation = Math.round(lockedNectar * Math.min(progress, 1.0));
+  const refund = lockedNectar - compensation;
+
+  return prisma.$transaction(async (tx) => {
+    // Pay worker compensation for partial work
+    if (compensation > 0) {
+      const worker = await tx.drone.findUniqueOrThrow({ where: { id: workerId } });
+      const workerNewBalance = worker.nectar + compensation;
+
+      await tx.drone.update({
+        where: { id: workerId },
+        data: {
+          nectar: workerNewBalance,
+          totalEarned: { increment: compensation },
+        },
+      });
+
+      await tx.nectarLedger.create({
+        data: {
+          droneId: workerId,
+          taskId,
+          type: "compensation",
+          amount: compensation,
+          balanceAfter: workerNewBalance,
+          description: `Compensation ${compensation} Nectar (task cancelled at ${Math.round(progress * 100)}% progress)`,
+        },
+      });
+    }
+
+    // Refund publisher the remainder
+    if (refund > 0) {
+      const publisher = await tx.drone.findUniqueOrThrow({ where: { id: publisherId } });
+      const pubNewBalance = publisher.nectar + refund;
+
+      await tx.drone.update({
+        where: { id: publisherId },
+        data: { nectar: pubNewBalance },
+      });
+
+      await tx.nectarLedger.create({
+        data: {
+          droneId: publisherId,
+          taskId,
+          type: "refund",
+          amount: refund,
+          balanceAfter: pubNewBalance,
+          description: `Refunded ${refund} Nectar (task cancelled, worker compensated ${compensation})`,
+        },
+      });
+    }
+
+    return { compensation, refund };
+  });
+}

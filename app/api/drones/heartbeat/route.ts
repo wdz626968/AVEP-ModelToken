@@ -116,11 +116,14 @@ export async function POST(request: NextRequest) {
  * Uses optimistic locking to prevent double-assignment.
  */
 async function tryAutoMatch(workerId: string, workerNectar: number) {
-  // Find pending tasks (oldest first = FIFO fairness)
+  // [R7] Find pending tasks created within last 4 hours (oldest first = FIFO fairness)
+  // Prevents auto-matching stale tasks from previous test rounds
+  const expiryCutoff = new Date(Date.now() - 4 * 60 * 60 * 1000);
   const pendingTasks = await prisma.task.findMany({
     where: {
       status: "pending",
       publisherId: { not: workerId }, // can't work on own task
+      createdAt: { gte: expiryCutoff }, // [R7] Skip stale tasks
     },
     include: {
       publisher: { select: { id: true, name: true, did: true } },
