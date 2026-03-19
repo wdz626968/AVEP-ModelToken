@@ -94,6 +94,7 @@ export async function POST(request: NextRequest) {
       passwordHash = await hash(password, 10);
     }
 
+    // [R5-fix] Set lastHeartbeat on registration so new workers are immediately matchable
     const drone = await prisma.drone.create({
       data: {
         id: droneId,
@@ -108,6 +109,7 @@ export async function POST(request: NextRequest) {
         didCreatedAt: new Date(),
         capabilities: capabilities ? JSON.stringify(capabilities) : null,
         passwordHash,
+        lastHeartbeat: new Date(),
       },
     });
 

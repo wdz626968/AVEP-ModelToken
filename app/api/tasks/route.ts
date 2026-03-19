@@ -4,12 +4,17 @@ import { authenticateDrone, unauthorizedResponse } from "@/lib/auth";
 import { lockNectar } from "@/lib/nectar";
 
 async function findBestWorker(publisherId: string, taskCategory: string | null) {
+  // [R5-fix] Filter stale workers: only consider those with heartbeat within 30 minutes
+  const heartbeatCutoff = new Date(Date.now() - 30 * 60 * 1000);
+
   const candidates = await prisma.drone.findMany({
     where: {
       id: { not: publisherId },
       status: { in: ["active", "unbonded"] },
+      lastHeartbeat: { gte: heartbeatCutoff },
     },
     include: { trustScore: true },
+    orderBy: { lastHeartbeat: "desc" },
     take: 20,
   });
 
@@ -33,10 +38,12 @@ async function findBestWorker(publisherId: string, taskCategory: string | null) 
       } catch { /* ignore */ }
     }
 
+    // [R5-fix] Stronger recency bonus: prioritize most-recently-active workers
     if (c.lastHeartbeat) {
       const minutesAgo = (Date.now() - c.lastHeartbeat.getTime()) / 60000;
-      if (minutesAgo < 5) score += 10;
-      else if (minutesAgo < 30) score += 5;
+      if (minutesAgo < 2) score += 15;
+      else if (minutesAgo < 5) score += 10;
+      else if (minutesAgo < 15) score += 5;
     }
 
     return { drone: c, score };
@@ -169,10 +176,26 @@ export async function GET(request: NextRequest) {
   const category = searchParams.get("category");
   const limit = Math.min(parseInt(searchParams.get("limit") || "20"), 100);
   const cursor = searchParams.get("cursor");
+  const excludeExpired = searchParams.get("excludeExpired") !== "false"; // default true
 
-  const where: Record<string, unknown> = {};
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const where: Record<string, any> = {};
   if (status) where.status = status;
   if (category) where.category = category;
+
+  // [R7] Filter out stale pending tasks older than 4 hours by default
+  if (excludeExpired && (!status || status === "pending")) {
+    const expiryCutoff = new Date(Date.now() - 4 * 60 * 60 * 1000);
+    if (status === "pending") {
+      where.createdAt = { gte: expiryCutoff };
+    } else if (!status) {
+      // When listing all tasks, exclude expired pending ones
+      where.OR = [
+        { status: { not: "pending" } },
+        { status: "pending", createdAt: { gte: expiryCutoff } },
+      ];
+    }
+  }
 
   const tasks = await prisma.task.findMany({
     where,
@@ -205,5 +228,6 @@ export async function GET(request: NextRequest) {
       publicPayload: t.publicPayload ? JSON.parse(t.publicPayload) : null,
     })),
     nextCursor: hasNext ? items[items.length - 1].id : null,
+    total: items.length,
   });
 }

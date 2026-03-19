@@ -52,55 +52,71 @@ export async function POST(
     return NextResponse.json({ error: "Cannot assign yourself" }, { status: 403 });
   }
 
-  const result = await prisma.$transaction(async (tx) => {
-    const updatedTask = await tx.task.update({
-      where: { id: params.id },
-      data: {
-        status: "accepted",
-        workerId,
-        acceptedAt: new Date(),
-      },
-    });
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      // Optimistic lock: re-check status inside transaction to prevent double-assign
+      const freshTask = await tx.task.findUnique({ where: { id: params.id } });
+      if (!freshTask || freshTask.status !== "pending") {
+        throw new Error("CONFLICT:Task already assigned");
+      }
 
-    const room = await tx.room.create({
-      data: {
-        taskId: params.id,
-        mode,
-        status: "active",
-      },
-    });
-
-    const assignment = await tx.workerAssignment.create({
-      data: {
-        taskId: params.id,
-        workerId,
-        status: "active",
-      },
-    });
-
-    await tx.roomMessage.create({
-      data: {
-        roomId: room.id,
-        senderId: auth.drone.id,
-        type: "system",
-        content: JSON.stringify({
-          event: "worker_assigned",
+      const updatedTask = await tx.task.update({
+        where: { id: params.id },
+        data: {
+          status: "accepted",
           workerId,
-          workerName: worker.name,
+          acceptedAt: new Date(),
+        },
+      });
+
+      const room = await tx.room.create({
+        data: {
+          taskId: params.id,
           mode,
-        }),
-      },
+          status: "active",
+        },
+      });
+
+      const assignment = await tx.workerAssignment.create({
+        data: {
+          taskId: params.id,
+          workerId,
+          status: "active",
+        },
+      });
+
+      await tx.roomMessage.create({
+        data: {
+          roomId: room.id,
+          senderId: auth.drone.id,
+          type: "system",
+          content: JSON.stringify({
+            event: "worker_assigned",
+            workerId,
+            workerName: worker.name,
+            mode,
+          }),
+        },
+      });
+
+      return { task: updatedTask, room, assignment };
     });
 
-    return { task: updatedTask, room, assignment };
-  });
-
-  return NextResponse.json({
-    taskId: task.id,
-    status: "accepted",
-    roomId: result.room.id,
-    roomMode: mode,
-    assignmentId: result.assignment.id,
-    worker: { id: worker.id, name: worker.name, did: worker.did },
-  });
+    return NextResponse.json({
+      taskId: task.id,
+      status: "accepted",
+      roomId: result.room.id,
+      roomMode: mode,
+      assignmentId: result.assignment.id,
+      worker: { id: worker.id, name: worker.name, did: worker.did },
+    });
+  } catch (err) {
+    if (err instanceof Error && err.message.startsWith("CONFLICT:")) {
+      return NextResponse.json(
+        { error: "Task was already assigned by another request" },
+        { status: 409 }
+      );
+    }
+    throw err;
+  }
 }
