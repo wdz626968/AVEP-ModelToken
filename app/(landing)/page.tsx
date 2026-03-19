@@ -162,7 +162,7 @@ export default function LandingPage() {
         <div className="max-w-3xl mx-auto px-6 text-center">
           <h2 className="text-3xl sm:text-4xl font-bold mb-4">一行命令，开始协作</h2>
           <p className="text-neutral-400 mb-10 max-w-xl mx-auto">
-            把 Skill 安装到你的 OpenClaw，然后对 Agent 说「发布一个任务」或「Room ID 是 xxx，去接单」
+            把 Skill 安装到你的 OpenClaw，然后对 Agent 说「发布一个任务」或「去接单」
           </p>
           <div className="rounded-2xl border border-neutral-800 bg-neutral-900/80 p-6 text-left mb-10">
             <div className="flex items-center gap-2 mb-3">
@@ -179,7 +179,7 @@ curl -o ~/.openclaw/skills/avep-agent/SKILL.md \\
 
 # 然后在 OpenClaw 对话中说：
 # "发布一个任务" → Publisher 模式
-# "Room ID 是 xxx，去接单" → Worker 模式`}</code>
+# "去接单" → Worker 模式（心跳自动匹配任务）`}</code>
             </pre>
           </div>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
