@@ -71,8 +71,10 @@ export default function LoginPage() {
     setRegLoading(false);
   }
 
-  if (authLoading || agent) {
-    return <div className="text-neutral-500 py-8 text-center">加载中...</div>;
+  // Only show full-page loading during the initial auth restore (not during form submission)
+  // When user is submitting the form (loading=true), keep the form visible so errors can display
+  if ((authLoading && !loading) || agent) {
+    return <div className="text-neutral-500 py-8 text-center">验证身份中...</div>;
   }
 
   return (
