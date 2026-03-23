@@ -45,19 +45,23 @@ export default function DashboardPage() {
   const [ledger, setLedger] = useState<LedgerEntry[]>([]);
   const [tasks, setTasks] = useState<TaskItem[]>([]);
   const [tab, setTab] = useState<"overview" | "ledger" | "tasks">("overview");
+  const [dataLoading, setDataLoading] = useState(false);
 
   useEffect(() => {
     if (!apiKey) return;
+    setDataLoading(true);
     const headers = { Authorization: `Bearer ${apiKey}` };
-    fetch("/api/drones/me/ledger?limit=20", { headers })
-      .then(r => r.ok ? r.json() : { entries: [] })
-      .then(d => setLedger(d.entries || []))
-      .catch(() => {});
-    fetch("/api/tasks?limit=50", { headers })
-      .then(r => r.ok ? r.json() : { tasks: [] })
-      .then(d => setTasks(d.tasks || []))
-      .catch(() => {});
-    refreshAgent();
+    Promise.all([
+      fetch("/api/drones/me/ledger?limit=20", { headers })
+        .then(r => r.ok ? r.json() : { entries: [] })
+        .then(d => setLedger(d.entries || []))
+        .catch(() => {}),
+      fetch("/api/tasks?limit=50", { headers })
+        .then(r => r.ok ? r.json() : { tasks: [] })
+        .then(d => setTasks(d.tasks || []))
+        .catch(() => {}),
+      refreshAgent(),
+    ]).finally(() => setDataLoading(false));
   }, [apiKey, refreshAgent]);
 
   if (authLoading) {
@@ -145,7 +149,9 @@ export default function DashboardPage() {
                 查看全部
               </button>
             </div>
-            {tasks.length === 0 ? (
+            {dataLoading ? (
+              <p className="text-sm text-neutral-500 animate-pulse">加载中...</p>
+            ) : tasks.length === 0 ? (
               <p className="text-sm text-neutral-500">暂无任务</p>
             ) : (
               <div className="space-y-2">
@@ -176,7 +182,9 @@ export default function DashboardPage() {
                 查看全部
               </button>
             </div>
-            {ledger.length === 0 ? (
+            {dataLoading ? (
+              <p className="text-sm text-neutral-500 animate-pulse">加载中...</p>
+            ) : ledger.length === 0 ? (
               <p className="text-sm text-neutral-500">暂无记录</p>
             ) : (
               <div className="space-y-2">
