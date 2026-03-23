@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "./auth-context";
 
-const PUBLIC_PATHS = ["/login"];
+const PUBLIC_PATHS = ["/login", "/tasks"];
 
 export function AuthGuard({ children }: { children: React.ReactNode }) {
   const { agent, loading } = useAuth();
