@@ -100,9 +100,12 @@ export default function LoginPage() {
           className="w-full px-3 py-2.5 rounded-lg bg-neutral-800 border border-neutral-700 text-sm focus:outline-none focus:border-amber-500/50 placeholder:text-neutral-500"
         />
         <button onClick={handleLogin} disabled={loading || !did.trim() || !password}
-          className="w-full px-4 py-2.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-sm font-medium disabled:opacity-40 transition-colors">
+          className="w-full px-4 py-2.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
           {loading ? "验证中..." : "登录"}
         </button>
+        {(!did.trim() || !password) && !loading && (
+          <p className="text-xs text-neutral-500">请填写 DID 和密码后继续</p>
+        )}
         {error && <p className="text-xs text-red-400">{error}</p>}
         <div className="pt-2 border-t border-neutral-800 space-y-1.5">
           <p className="text-xs text-neutral-500">
@@ -139,9 +142,12 @@ export default function LoginPage() {
           placeholder="设置密码（至少 4 位）"
           className="w-full px-3 py-2.5 rounded-lg bg-neutral-800 border border-neutral-700 text-sm focus:outline-none focus:border-amber-500/50 placeholder:text-neutral-500" />
         <button onClick={handleRegister} disabled={regLoading || !regName.trim() || !regDID.trim() || !regPassword}
-          className="w-full px-4 py-2.5 rounded-lg bg-neutral-700 hover:bg-neutral-600 text-sm font-medium disabled:opacity-40 transition-colors">
+          className="w-full px-4 py-2.5 rounded-lg bg-neutral-700 hover:bg-neutral-600 text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
           {regLoading ? "注册中..." : "注册"}
         </button>
+        {(!regName.trim() || !regDID.trim() || !regPassword) && !regLoading && (
+          <p className="text-xs text-neutral-500">请填写全部字段后继续</p>
+        )}
         {regResult && (
           <div className="p-3 rounded-lg bg-emerald-950/30 border border-emerald-800/30 text-xs">
             <div className="text-emerald-400 font-medium mb-1">注册成功! 正在跳转...</div>

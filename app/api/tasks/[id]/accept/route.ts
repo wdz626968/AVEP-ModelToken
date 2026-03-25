@@ -9,6 +9,7 @@ export async function POST(
   const auth = await authenticateDrone(request);
   if (!auth) return unauthorizedResponse();
 
+  // Pre-flight read (no side effects)
   const task = await prisma.task.findUnique({
     where: { id: params.id },
     include: { publisher: { select: { id: true, name: true, did: true } } },
@@ -16,14 +17,6 @@ export async function POST(
   if (!task) {
     return NextResponse.json({ error: "Task not found" }, { status: 404 });
   }
-
-  if (task.status !== "pending") {
-    return NextResponse.json(
-      { error: `Cannot accept task in '${task.status}' status` },
-      { status: 409 }
-    );
-  }
-
   if (task.publisherId === auth.drone.id) {
     return NextResponse.json(
       { error: "Cannot accept your own task" },
@@ -31,14 +24,31 @@ export async function POST(
     );
   }
 
-  await prisma.task.update({
-    where: { id: params.id },
-    data: {
-      status: "accepted",
-      workerId: auth.drone.id,
-      acceptedAt: new Date(),
-    },
-  });
+  // Optimistic lock: re-confirm status inside transaction to prevent double-accept
+  try {
+    await prisma.$transaction(async (tx) => {
+      const fresh = await tx.task.findUnique({ where: { id: params.id } });
+      if (!fresh || fresh.status !== "pending") {
+        throw new Error("CONFLICT:already_accepted");
+      }
+      await tx.task.update({
+        where: { id: params.id },
+        data: {
+          status: "accepted",
+          workerId: auth.drone.id,
+          acceptedAt: new Date(),
+        },
+      });
+    });
+  } catch (err) {
+    if (err instanceof Error && err.message.startsWith("CONFLICT:")) {
+      return NextResponse.json(
+        { error: `Cannot accept task in '${task.status}' status` },
+        { status: 409 }
+      );
+    }
+    throw err;
+  }
 
   return NextResponse.json({
     status: "accepted",

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { authenticateDrone, unauthorizedResponse } from "@/lib/auth";
+import { scoreTaskForWorker } from "@/lib/matching";
 
 /**
  * POST /api/drones/heartbeat
@@ -92,8 +93,13 @@ export async function POST(request: NextRequest) {
   let autoAssigned = null;
 
   if (availableForWork && pendingRooms.length === 0) {
-    autoAssigned = await tryAutoMatch(auth.drone.id, auth.drone.nectar);
+    autoAssigned = await tryAutoMatch(auth.drone.id, auth.drone);
   }
+  const nextHeartbeatMs = autoAssigned
+    ? 30000   // just got a task, no need to rush
+    : pendingRooms.length > 0
+    ? 15000   // active tasks, moderate polling
+    : 30000;  // idle, standard interval
 
   return NextResponse.json({
     status: "ok",
@@ -103,6 +109,7 @@ export async function POST(request: NextRequest) {
       ? [...pendingRooms, autoAssigned]
       : pendingRooms,
     autoAssigned: autoAssigned ? true : false,
+    nextHeartbeatMs,
     message: autoAssigned
       ? `Auto-assigned task "${autoAssigned.title}". Enter Room ${autoAssigned.roomId} to start.`
       : pendingRooms.length > 0
@@ -113,57 +120,66 @@ export async function POST(request: NextRequest) {
 
 /**
  * Try to auto-match this worker to a pending task.
- * Uses optimistic locking to prevent double-assignment.
+ * v2: score-driven selection (best-fit task) instead of FIFO.
  */
-async function tryAutoMatch(workerId: string, workerNectar: number) {
-  // [R7] Find pending tasks created within last 4 hours (oldest first = FIFO fairness)
-  // Prevents auto-matching stale tasks from previous test rounds
+async function tryAutoMatch(workerId: string, drone: { id: string; capabilities: string | null; did: string | null }) {
   const expiryCutoff = new Date(Date.now() - 4 * 60 * 60 * 1000);
+
+  // Fetch more candidates (20 instead of 5) to allow score-based selection
   const pendingTasks = await prisma.task.findMany({
     where: {
       status: "pending",
-      publisherId: { not: workerId }, // can't work on own task
-      createdAt: { gte: expiryCutoff }, // [R7] Skip stale tasks
+      publisherId: { not: workerId },
+      createdAt: { gte: expiryCutoff },
     },
     include: {
       publisher: { select: { id: true, name: true, did: true } },
       room: { select: { id: true, status: true } },
     },
     orderBy: { createdAt: "asc" },
-    take: 5,
+    take: 20,
   });
 
   if (pendingTasks.length === 0) return null;
 
-  // Try to claim the first available task
-  for (const task of pendingTasks) {
+  // Batch-fetch publisher collab counts for scoring
+  const publisherIds = [...new Set(pendingTasks.map((t) => t.publisherId))];
+  const collabCounts = await prisma.task.groupBy({
+    by: ["publisherId"],
+    where: { workerId, publisherId: { in: publisherIds }, status: "completed" },
+    _count: { publisherId: true },
+  });
+  const collabMap = new Map(collabCounts.map((c) => [c.publisherId, c._count.publisherId]));
+
+  // Score each pending task from the Worker's perspective (v2: score-driven)
+  const scored = pendingTasks
+    .map((task) => ({
+      task,
+      score: scoreTaskForWorker(
+        task,
+        drone as Parameters<typeof scoreTaskForWorker>[1],
+        collabMap.get(task.publisherId) ?? 0
+      ),
+    }))
+    .sort((a, b) => b.score - a.score);
+
+  // Try to claim in score order (best-fit first, not FIFO)
+  for (const { task } of scored) {
     try {
       const result = await prisma.$transaction(async (tx) => {
-        // Optimistic lock: verify still pending
         const fresh = await tx.task.findUnique({ where: { id: task.id } });
-        if (!fresh || fresh.status !== "pending") {
-          throw new Error("SKIP"); // Another worker claimed it
-        }
+        if (!fresh || fresh.status !== "pending") throw new Error("SKIP");
 
         await tx.task.update({
           where: { id: task.id },
-          data: {
-            status: "accepted",
-            workerId,
-            acceptedAt: new Date(),
-          },
+          data: { status: "accepted", workerId, acceptedAt: new Date() },
         });
 
-        // Reuse existing room (from failed/switched worker) or create new
         let roomId: string;
         if (task.room) {
           roomId = task.room.id;
-          // Reopen room if it was closed
           if (task.room.status !== "active") {
-            await tx.room.update({
-              where: { id: roomId },
-              data: { status: "active" },
-            });
+            await tx.room.update({ where: { id: roomId }, data: { status: "active" } });
           }
         } else {
           const room = await tx.room.create({
@@ -185,7 +201,7 @@ async function tryAutoMatch(workerId: string, workerNectar: number) {
               event: "worker_auto_assigned",
               workerId,
               mode: "centralized",
-              trigger: "heartbeat_auto_match",
+              trigger: "heartbeat_auto_match_v2",
             }),
           },
         });
@@ -196,17 +212,18 @@ async function tryAutoMatch(workerId: string, workerNectar: number) {
           roomId,
           roomStatus: "active",
           estimatedTokens: task.estimatedTokens,
+          category: task.category,
+          priority: task.priority,
           publisher: task.publisher,
           assignedAt: new Date(),
         };
       });
 
-      return result; // Successfully claimed a task
+      return result;
     } catch {
-      // This task was claimed by someone else or error, try next
       continue;
     }
   }
 
-  return null; // No tasks could be claimed
+  return null;
 }

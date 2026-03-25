@@ -1,57 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { authenticateDrone, unauthorizedResponse } from "@/lib/auth";
-import { lockNectar } from "@/lib/nectar";
-
-async function findBestWorker(publisherId: string, taskCategory: string | null) {
-  // [R5-fix] Filter stale workers: only consider those with heartbeat within 30 minutes
-  const heartbeatCutoff = new Date(Date.now() - 30 * 60 * 1000);
-
-  const candidates = await prisma.drone.findMany({
-    where: {
-      id: { not: publisherId },
-      status: { in: ["active", "unbonded"] },
-      lastHeartbeat: { gte: heartbeatCutoff },
-    },
-    include: { trustScore: true },
-    orderBy: { lastHeartbeat: "desc" },
-    take: 20,
-  });
-
-  if (candidates.length === 0) return null;
-
-  const scored = candidates.map((c) => {
-    let score = 0;
-    const trust = c.trustScore;
-
-    if (trust) {
-      score += trust.overallScore * 0.3;
-      score += trust.taskCompletionRate * 20;
-      score += (1 - Math.min(trust.avgResponseMs, 60000) / 60000) * 10;
-      score += trust.uptimeRatio * 10;
-    }
-
-    if (taskCategory && c.capabilities) {
-      try {
-        const caps = JSON.parse(c.capabilities);
-        if (caps.categories?.includes(taskCategory)) score += 15;
-      } catch { /* ignore */ }
-    }
-
-    // [R5-fix] Stronger recency bonus: prioritize most-recently-active workers
-    if (c.lastHeartbeat) {
-      const minutesAgo = (Date.now() - c.lastHeartbeat.getTime()) / 60000;
-      if (minutesAgo < 2) score += 15;
-      else if (minutesAgo < 5) score += 10;
-      else if (minutesAgo < 15) score += 5;
-    }
-
-    return { drone: c, score };
-  });
-
-  scored.sort((a, b) => b.score - a.score);
-  return scored[0].drone;
-}
+import { findBestWorker, generateMatchHint, MatchPreference } from "@/lib/matching";
 
 export async function POST(request: NextRequest) {
   const auth = await authenticateDrone(request);
@@ -66,6 +16,7 @@ export async function POST(request: NextRequest) {
       estimatedTokens,
       priority = "medium",
       category,
+      matchPreference,
     } = body;
 
     if (!title || !description || !estimatedTokens) {
@@ -74,14 +25,12 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
-
     if (estimatedTokens <= 0 || estimatedTokens > 10000) {
       return NextResponse.json(
         { error: "estimatedTokens must be between 1 and 10000" },
         { status: 400 }
       );
     }
-
     if (auth.drone.nectar < estimatedTokens) {
       return NextResponse.json(
         { error: "Insufficient Nectar", have: auth.drone.nectar, need: estimatedTokens },
@@ -89,32 +38,72 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const bestWorker = await findBestWorker(auth.drone.id, category || null);
+    const taskContext = {
+      category: category || null,
+      priority: priority as "high" | "medium" | "low",
+      estimatedTokens,
+      publisherId: auth.drone.id,
+      preference: matchPreference as MatchPreference | undefined,
+    };
 
-    if (!bestWorker) {
-      const task = await prisma.task.create({
-        data: {
-          title, description,
-          publicPayload: publicPayload ? JSON.stringify(publicPayload) : null,
-          estimatedTokens, lockedNectar: estimatedTokens,
-          priority, category: category || null,
-          status: "pending", publisherId: auth.drone.id,
-        },
+    const bestMatch = await findBestWorker(taskContext);
+
+    // ── Case 1: No available Worker ──────────────────────────────────────────
+    if (!bestMatch) {
+      const matchHint = await generateMatchHint(
+        auth.drone.id,
+        category || null,
+        estimatedTokens
+      );
+
+      const result = await prisma.$transaction(async (tx) => {
+        const freshDrone = await tx.drone.findUniqueOrThrow({ where: { id: auth.drone.id } });
+        if (freshDrone.nectar < estimatedTokens) throw new Error("INSUFFICIENT_NECTAR");
+
+        const task = await tx.task.create({
+          data: {
+            title, description,
+            publicPayload: publicPayload ? JSON.stringify(publicPayload) : null,
+            estimatedTokens, lockedNectar: estimatedTokens,
+            priority, category: category || null,
+            status: "pending", publisherId: auth.drone.id,
+          },
+        });
+
+        const newBalance = freshDrone.nectar - estimatedTokens;
+        await tx.drone.update({
+          where: { id: auth.drone.id },
+          data: { nectar: newBalance, totalSpent: { increment: estimatedTokens }, tasksPublished: { increment: 1 } },
+        });
+        await tx.nectarLedger.create({
+          data: {
+            droneId: auth.drone.id, taskId: task.id,
+            type: "lock", amount: -estimatedTokens, balanceAfter: newBalance,
+            description: `Locked ${estimatedTokens} Nectar for task`,
+          },
+        });
+        return { task, remainingNectar: newBalance };
       });
-      await lockNectar(auth.drone.id, task.id, estimatedTokens);
 
       return NextResponse.json({
-        taskId: task.id,
+        taskId: result.task.id,
         status: "pending",
         roomId: null,
         worker: null,
         lockedNectar: estimatedTokens,
-        remainingNectar: auth.drone.nectar - estimatedTokens,
-        note: "Task published but no available Worker found. Task remains pending; it will be assigned when a Worker becomes available. You can also manually assign via POST /api/tasks/:id/assign.",
+        remainingNectar: result.remainingNectar,
+        matchHint,
+        note: "Task published but no available Worker found. Check matchHint.suggestedPollIntervalMs for polling frequency.",
       }, { status: 201 });
     }
 
+    // ── Case 2: Worker found — create task + room + Nectar lock atomically ───
+    const { worker: bestWorker, matchScore, breakdown, candidateCount } = bestMatch;
+
     const result = await prisma.$transaction(async (tx) => {
+      const freshDrone = await tx.drone.findUniqueOrThrow({ where: { id: auth.drone.id } });
+      if (freshDrone.nectar < estimatedTokens) throw new Error("INSUFFICIENT_NECTAR");
+
       const task = await tx.task.create({
         data: {
           title, description,
@@ -134,34 +123,88 @@ export async function POST(request: NextRequest) {
         data: { taskId: task.id, workerId: bestWorker.id, status: "active" },
       });
 
+      // v2: embed matchSnapshot in system message for full observability
       await tx.roomMessage.create({
         data: {
-          roomId: room.id, senderId: auth.drone.id, type: "system",
+          roomId: room.id,
+          senderId: auth.drone.id,
+          type: "system",
           content: JSON.stringify({
             event: "worker_assigned",
             workerId: bestWorker.id,
             workerName: bestWorker.name,
             mode: "centralized",
             autoAssigned: true,
+            matchSnapshot: {
+              matchScore,
+              candidateCount,
+              scoreBreakdown: breakdown,
+              heartbeatAgeMs: bestWorker.lastHeartbeat
+                ? Date.now() - bestWorker.lastHeartbeat.getTime()
+                : null,
+            },
           }),
         },
       });
 
-      return { task, room };
+      const newBalance = freshDrone.nectar - estimatedTokens;
+      await tx.drone.update({
+        where: { id: auth.drone.id },
+        data: { nectar: newBalance, totalSpent: { increment: estimatedTokens }, tasksPublished: { increment: 1 } },
+      });
+      await tx.nectarLedger.create({
+        data: {
+          droneId: auth.drone.id, taskId: task.id,
+          type: "lock", amount: -estimatedTokens, balanceAfter: newBalance,
+          description: `Locked ${estimatedTokens} Nectar for task`,
+        },
+      });
+
+      return { task, room, remainingNectar: newBalance };
     });
 
-    await lockNectar(auth.drone.id, result.task.id, estimatedTokens);
+    // Structured log for production diagnostics
+    console.log(JSON.stringify({
+      event: "match_decision",
+      taskId: result.task.id,
+      priority: taskContext.priority,
+      category: taskContext.category,
+      estimatedTokens,
+      candidateCount,
+      selected: {
+        workerId: bestWorker.id,
+        matchScore,
+        scoreBreakdown: breakdown,
+        heartbeatAgeMs: bestWorker.lastHeartbeat
+          ? Date.now() - bestWorker.lastHeartbeat.getTime()
+          : null,
+      },
+      ts: new Date().toISOString(),
+    }));
 
     return NextResponse.json({
       taskId: result.task.id,
       status: "accepted",
       roomId: result.room.id,
-      worker: { id: bestWorker.id, name: bestWorker.name, did: bestWorker.did },
+      worker: {
+        id: bestWorker.id,
+        name: bestWorker.name,
+        did: bestWorker.did,
+        matchScore,
+        matchReason: {
+          candidateCount,
+          scoreBreakdown: breakdown,
+        },
+      },
       lockedNectar: estimatedTokens,
-      remainingNectar: auth.drone.nectar - estimatedTokens,
-      note: "Task published and Worker auto-assigned. Room created. Send your task_payload to the Room now via POST /api/rooms/:roomId/messages.",
+      remainingNectar: result.remainingNectar,
+      note: "Task published and Worker auto-assigned. Send task_payload to the Room via POST /api/rooms/:roomId/messages.",
     }, { status: 201 });
+
   } catch (error) {
+    if (error instanceof Error && error.message === "INSUFFICIENT_NECTAR") {
+      return NextResponse.json({ error: "Insufficient Nectar" }, { status: 402 });
+    }
     console.error("Publish task error:", error);
     return NextResponse.json(
       { error: "Internal server error", detail: String(error) },
@@ -176,20 +219,18 @@ export async function GET(request: NextRequest) {
   const category = searchParams.get("category");
   const limit = Math.min(parseInt(searchParams.get("limit") || "20"), 100);
   const cursor = searchParams.get("cursor");
-  const excludeExpired = searchParams.get("excludeExpired") !== "false"; // default true
+  const excludeExpired = searchParams.get("excludeExpired") !== "false";
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const where: Record<string, any> = {};
   if (status) where.status = status;
   if (category) where.category = category;
 
-  // [R7] Filter out stale pending tasks older than 4 hours by default
   if (excludeExpired && (!status || status === "pending")) {
     const expiryCutoff = new Date(Date.now() - 4 * 60 * 60 * 1000);
     if (status === "pending") {
       where.createdAt = { gte: expiryCutoff };
     } else if (!status) {
-      // When listing all tasks, exclude expired pending ones
       where.OR = [
         { status: { not: "pending" } },
         { status: "pending", createdAt: { gte: expiryCutoff } },
@@ -200,17 +241,9 @@ export async function GET(request: NextRequest) {
   const tasks = await prisma.task.findMany({
     where,
     select: {
-      id: true,
-      title: true,
-      description: true,
-      publicPayload: true,
-      estimatedTokens: true,
-      lockedNectar: true,
-      priority: true,
-      category: true,
-      status: true,
-      publisherId: true,
-      workerId: true,
+      id: true, title: true, description: true, publicPayload: true,
+      estimatedTokens: true, lockedNectar: true, priority: true,
+      category: true, status: true, publisherId: true, workerId: true,
       createdAt: true,
       publisher: { select: { id: true, name: true, did: true } },
     },

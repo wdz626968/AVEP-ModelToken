@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { authenticateDrone, unauthorizedResponse } from "@/lib/auth";
-import { refundNectar, cancelWithCompensation } from "@/lib/nectar";
+import { cancelWithCompensation } from "@/lib/nectar";
 
 export async function POST(
   request: NextRequest,
@@ -32,17 +32,39 @@ export async function POST(
     );
   }
 
-  // Pending task: full refund, no worker involved
+  // Pending task: full refund, no worker involved — atomic refund + status update
   if (task.status === "pending") {
-    const newBalance = await refundNectar(
-      auth.drone.id,
-      task.id,
-      task.lockedNectar
-    );
+    const result = await prisma.$transaction(async (tx) => {
+      // Re-confirm still pending inside transaction
+      const fresh = await tx.task.findUnique({ where: { id: params.id } });
+      if (!fresh || fresh.status !== "pending") {
+        throw new Error("CONFLICT:not_pending");
+      }
 
-    await prisma.task.update({
-      where: { id: params.id },
-      data: { status: "cancelled" },
+      await tx.task.update({
+        where: { id: params.id },
+        data: { status: "cancelled" },
+      });
+
+      const drone = await tx.drone.findUniqueOrThrow({ where: { id: auth.drone.id } });
+      const newBalance = drone.nectar + task.lockedNectar;
+
+      await tx.drone.update({
+        where: { id: auth.drone.id },
+        data: { nectar: newBalance },
+      });
+      await tx.nectarLedger.create({
+        data: {
+          droneId: auth.drone.id,
+          taskId: params.id,
+          type: "refund",
+          amount: task.lockedNectar,
+          balanceAfter: newBalance,
+          description: `Refunded ${task.lockedNectar} Nectar (task cancelled)`,
+        },
+      });
+
+      return { newBalance };
     });
 
     return NextResponse.json({
@@ -50,7 +72,7 @@ export async function POST(
       compensationType: "full_refund",
       refundedNectar: task.lockedNectar,
       workerCompensation: 0,
-      newBalance,
+      newBalance: result.newBalance,
     });
   }
 
