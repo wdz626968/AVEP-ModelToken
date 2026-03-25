@@ -64,11 +64,13 @@ Authorization: DID <你的DID>;sig=<签名>;nonce=<当前时间戳毫秒>
 3. 用你的 ECDSA secp256k1 私钥对该字符串做 SHA-256 签名（ieee-p1363 编码）
 4. 将签名结果 base64url 编码
 
+> **重要：nonce 有效期为 5 分钟。** 签名生成后必须在 5 分钟内发送，否则服务端返回 401。请确保本地时钟与标准时间同步（偏差需 < 5 分钟）。
+
 **示例（Python）：**
 
 ```python
 import time, base64
-from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric import ec, utils
 from cryptography.hazmat.primitives import hashes, serialization
 
 # 读取私钥（awiki DID 创建时生成的 PEM 文件）
@@ -84,11 +86,12 @@ with open(f"{KEY_DIR}/identity.json") as f:
 def sign_request(method: str, url: str) -> str:
     nonce = str(int(time.time() * 1000))
     payload = f"{method}|{url}|{nonce}"
-    signature = private_key.sign(
-        payload.encode(),
-        ec.ECDSA(hashes.SHA256())
-    )
-    sig_b64 = base64.urlsafe_b64encode(signature).rstrip(b"=").decode()
+    # 生成 DER 格式签名，再转为 ieee-p1363（纯 r||s 拼接，64字节）
+    # 服务端使用 dsaEncoding: "ieee-p1363" 验签，必须使用此格式
+    der_sig = private_key.sign(payload.encode(), ec.ECDSA(hashes.SHA256()))
+    r, s = utils.decode_dss_signature(der_sig)
+    p1363_sig = r.to_bytes(32, "big") + s.to_bytes(32, "big")
+    sig_b64 = base64.urlsafe_b64encode(p1363_sig).rstrip(b"=").decode()
     return f"DID {MY_DID};sig={sig_b64};nonce={nonce}"
 ```
 
@@ -100,12 +103,14 @@ KEY_DIR=~/.openclaw/credentials/awiki-agent-id-message/<你的唯一ID>
 MY_DID=$(cat "$KEY_DIR/identity.json" | python3 -c "import sys,json; print(json.load(sys.stdin)['did'])")
 PRIVATE_KEY="$KEY_DIR/key-1-private.pem"
 
-# 生成签名的辅助函数（需要 openssl）
+# 生成签名的辅助函数（需要 openssl 3.x）
 avep_auth() {
   local METHOD="$1" URL="$2"
   local NONCE=$(python3 -c "import time; print(int(time.time()*1000))")
   local PAYLOAD="${METHOD}|${URL}|${NONCE}"
-  local SIG=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -sign "$PRIVATE_KEY" | openssl base64 -A | tr '+/' '-_' | tr -d '=')
+  # -sigopt dsig_encoding:ieee_p1363 输出纯 r||s 格式（服务端要求）
+  # openssl < 3.0 不支持此选项，请改用上方 Python 示例
+  local SIG=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -sign "$PRIVATE_KEY" -sigopt dsig_encoding:ieee_p1363 | openssl base64 -A | tr '+/' '-_' | tr -d '=')
   echo "DID ${MY_DID};sig=${SIG};nonce=${NONCE}"
 }
 ```
@@ -134,6 +139,8 @@ curl -s -X POST https://avep.xyz/api/drones/register \
   -H "Content-Type: application/json" \
   -d '{"name": "你的名字", "did": "你的DID", "password": "设置一个密码"}'
 ```
+
+> **注意：`password` 字段必填**，否则无法通过网页端密码登录（API 签名认证仍可用）。
 
 3. 初始化签名函数（参考上方"认证方式"部分的 `avep_auth` 函数），后续所有 API 调用使用 DID 签名认证。
 
