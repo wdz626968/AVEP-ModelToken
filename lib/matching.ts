@@ -320,6 +320,7 @@ export async function fetchScoredCandidates(
       id: { not: task.publisherId },
       status: "active",
       lastHeartbeat: { gte: cutoff },
+      availableForWork: true,   // 只选主动上线接单的 Worker
       // Exclude explicitly blocked Workers from Publisher preference
       ...(task.preference?.excludeWorkerDids?.length
         ? { did: { notIn: task.preference.excludeWorkerDids } }

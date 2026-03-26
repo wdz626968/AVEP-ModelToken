@@ -110,6 +110,8 @@ export async function POST(request: NextRequest) {
         capabilities: capabilities ? JSON.stringify(capabilities) : null,
         passwordHash,
         lastHeartbeat: new Date(),
+        availableForWork: true,   // 注册即表示愿意接单
+        onlineAt: new Date(),
       },
     });
 

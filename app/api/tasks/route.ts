@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { authenticateDrone, unauthorizedResponse } from "@/lib/auth";
 import { findBestWorker, generateMatchHint, MatchPreference } from "@/lib/matching";
+import { sendAnpMessages } from "@/lib/anp";
 
 export async function POST(request: NextRequest) {
   const auth = await authenticateDrone(request);
@@ -181,6 +182,26 @@ export async function POST(request: NextRequest) {
       },
       ts: new Date().toISOString(),
     }));
+
+    // ── ANP 推送：通知 Worker 有新任务 ────────────────────────────────────────
+    // 异步推送，不阻塞 HTTP 响应
+    if (bestWorker.did) {
+      setImmediate(() => {
+        sendAnpMessages([
+          {
+            toDid: bestWorker.did!,
+            payload: {
+              type: "avep_task_assigned",
+              taskId: result.task.id,
+              roomId: result.room.id,
+              title,
+              estimatedTokens,
+              publisherDid: auth.drone.did ?? undefined,
+            },
+          },
+        ]).catch((e) => console.error("[ANP] push to worker failed:", e));
+      });
+    }
 
     return NextResponse.json({
       taskId: result.task.id,

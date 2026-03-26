@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { authenticateDrone, unauthorizedResponse } from "@/lib/auth";
 import { smartEncrypt, smartDecrypt } from "@/lib/crypto";
+import { sendAnpMessage } from "@/lib/anp";
 
 /**
  * GET /api/rooms/:id/messages — List messages in a Room (decrypts at rest)
@@ -65,7 +66,6 @@ export async function GET(
       createdAt: m.createdAt,
     })),
     nextCursor: hasNext ? items[items.length - 1].id : null,
-    encrypted: true,
   });
 }
 
@@ -132,6 +132,45 @@ export async function POST(
     include: { sender: { select: { id: true, name: true, did: true } } },
   });
 
+  // ── 当 Worker 发送 result 消息时，触发后续流程 ─────────────────────────
+  if (type === "result") {
+    setImmediate(async () => {
+      try {
+        const SETTLE_DEADLINE_HOURS = 48;
+        const settleDeadline = new Date(Date.now() + SETTLE_DEADLINE_HOURS * 60 * 60 * 1000);
+
+        // 1. 将任务标记为 result_pending，设置结算截止时间
+        const task = await prisma.task.update({
+          where: { id: room.taskId },
+          data: { status: "result_pending", settleDeadline },
+          include: {
+            publisher: { select: { id: true, did: true, name: true } },
+          },
+        });
+
+        // 2. 将 Worker 标记为空闲（可以接新任务）
+        await prisma.drone.update({
+          where: { id: auth.drone.id },
+          data: { availableForWork: true },
+        });
+
+        // 3. ANP 推送给 Publisher：结果已就绪，请在截止前确认
+        if (task.publisher.did) {
+          await sendAnpMessage(task.publisher.did, {
+            type: "avep_result_ready",
+            taskId: task.id,
+            roomId: params.id,
+            settleDeadline: settleDeadline.toISOString(),
+            workerName: auth.drone.name,
+            note: `Worker has submitted results. Please confirm via POST /api/tasks/${task.id}/settle within ${SETTLE_DEADLINE_HOURS}h, or the platform will auto-settle.`,
+          });
+        }
+      } catch (e) {
+        console.error("[result] post-processing failed:", e);
+      }
+    });
+  }
+
   return NextResponse.json(
     {
       id: message.id,
@@ -140,7 +179,6 @@ export async function POST(
       content: tryParseJson(rawContent),
       sender: message.sender,
       createdAt: message.createdAt,
-      encrypted: true,
     },
     { status: 201 }
   );

@@ -56,7 +56,6 @@ export async function GET(
       worker: cp.worker,
       createdAt: cp.createdAt,
     })),
-    encrypted: true,
   });
 }
 
@@ -159,7 +158,6 @@ export async function POST(
       sequence: checkpoint.sequence,
       progress: checkpoint.progress,
       createdAt: checkpoint.createdAt,
-      encrypted: true,
     },
     { status: 201 }
   );

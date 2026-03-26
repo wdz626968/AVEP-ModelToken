@@ -1,7 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { authenticateDrone, unauthorizedResponse } from "@/lib/auth";
+import { sendAnpMessage } from "@/lib/anp";
 
+/**
+ * POST /api/tasks/:id/settle
+ *
+ * Publisher 确认结算。Worker 完成任务后，AVEP 通过 ANP 推送结果给 Publisher，
+ * Publisher 调此接口确认（接受/拒绝）并触发 Nectar 结算。
+ *
+ * 超时自动结算：
+ *   - Worker 完成后，任务进入 "result_pending" 状态，settleDeadline = now + 48h
+ *   - Publisher 未在截止前操作 → cron job 自动以满分结算（保护 Worker 利益）
+ *   - Publisher 可拒绝（附原因），拒绝后可选 switch-worker 重新分配
+ *
+ * Body:
+ *   {
+ *     action: "accept" | "reject",   // 接受或拒绝结果
+ *     result: string,                 // 结算备注（accept 时为确认描述，reject 时为拒绝原因）
+ *     actualTokens: number,           // accept 时必填：实际消耗 token 数
+ *     rating: number,                 // 1-5，默认 5
+ *   }
+ */
 export async function POST(
   request: NextRequest,
   { params }: { params: { id: string } }
@@ -9,8 +29,14 @@ export async function POST(
   const auth = await authenticateDrone(request);
   if (!auth) return unauthorizedResponse();
 
-  // Pre-flight checks outside transaction (cheap reads, no side effects)
-  const task = await prisma.task.findUnique({ where: { id: params.id } });
+  const task = await prisma.task.findUnique({
+    where: { id: params.id },
+    include: {
+      worker: { select: { id: true, name: true, did: true } },
+      publisher: { select: { id: true, name: true, did: true } },
+    },
+  });
+
   if (!task) {
     return NextResponse.json({ error: "Task not found" }, { status: 404 });
   }
@@ -27,19 +53,65 @@ export async function POST(
     );
   }
 
-  const body = await request.json();
-  const { result, actualTokens, rating } = body;
-
-  const missingFields: string[] = [];
-  if (!result) missingFields.push("result (string: settlement verdict, e.g. 'approved')");
-  if (!actualTokens || actualTokens <= 0) missingFields.push("actualTokens (number > 0: tokens earned by worker)");
-  if (missingFields.length > 0) {
+  // 允许在 "accepted"（兼容旧流程）或 "result_pending"（新流程）状态下结算
+  if (task.status !== "accepted" && task.status !== "result_pending") {
     return NextResponse.json(
-      {
-        error: "Missing required fields for settlement",
-        missingFields,
-        example: { result: "approved", actualTokens: 35, rating: 5 },
-      },
+      { error: `Cannot settle task in status "${task.status}"` },
+      { status: 409 }
+    );
+  }
+
+  const body = await request.json();
+  const { action = "accept", result, actualTokens, rating = 5 } = body;
+
+  if (!["accept", "reject"].includes(action)) {
+    return NextResponse.json(
+      { error: 'action must be "accept" or "reject"' },
+      { status: 400 }
+    );
+  }
+
+  // ── 拒绝结果 ──────────────────────────────────────────────────────────────
+  if (action === "reject") {
+    if (!result) {
+      return NextResponse.json(
+        { error: "result (rejection reason) is required when action=reject" },
+        { status: 400 }
+      );
+    }
+
+    await prisma.task.update({
+      where: { id: params.id },
+      data: { status: "rejected", result: `[REJECTED] ${result}` },
+    });
+
+    // 通知 Worker 被拒绝
+    if (task.worker?.did) {
+      setImmediate(() => {
+        sendAnpMessage(task.worker!.did!, {
+          type: "avep_switch_worker",
+          taskId: task.id,
+          reason: result,
+        }).catch(() => {});
+      });
+    }
+
+    return NextResponse.json({
+      status: "rejected",
+      message: "Task rejected. You may call /switch-worker to reassign.",
+    });
+  }
+
+  // ── 接受结果，执行结算 ────────────────────────────────────────────────────
+  if (!result) {
+    return NextResponse.json(
+      { error: "result is required when action=accept" },
+      { status: 400 }
+    );
+  }
+  if (!actualTokens || actualTokens <= 0) {
+    return NextResponse.json(
+      { error: "actualTokens (number > 0) is required when action=accept" },
       { status: 400 }
     );
   }
@@ -48,19 +120,14 @@ export async function POST(
   const earned = capped;
   const refund = task.lockedNectar - earned;
 
-  // Single atomic transaction: status check + Nectar transfer + task update
-  // Prevents double-settlement: the task.update inside the transaction acts as an
-  // idempotency gate — a second concurrent call will find status !== "accepted" and abort.
   let settlement: { earned: number; refund: number };
   try {
     settlement = await prisma.$transaction(async (tx) => {
-      // Optimistic lock: re-read status inside transaction
       const fresh = await tx.task.findUnique({ where: { id: params.id } });
-      if (!fresh || fresh.status !== "accepted") {
+      if (!fresh || (fresh.status !== "accepted" && fresh.status !== "result_pending")) {
         throw new Error("CONFLICT:already_settled");
       }
 
-      // Lock the task status first — prevents any concurrent settle from passing the check above
       await tx.task.update({
         where: { id: params.id },
         data: {
@@ -69,10 +136,11 @@ export async function POST(
           actualTokens: capped,
           rating: rating || null,
           completedAt: new Date(),
+          settleDeadline: null,
         },
       });
 
-      // Pay the worker
+      // 付款给 Worker
       const worker = await tx.drone.findUniqueOrThrow({ where: { id: task.workerId! } });
       const workerNewBalance = worker.nectar + earned;
       await tx.drone.update({
@@ -85,16 +153,13 @@ export async function POST(
       });
       await tx.nectarLedger.create({
         data: {
-          droneId: task.workerId!,
-          taskId: params.id,
-          type: "earn",
-          amount: earned,
-          balanceAfter: workerNewBalance,
+          droneId: task.workerId!, taskId: params.id,
+          type: "earn", amount: earned, balanceAfter: workerNewBalance,
           description: `Earned ${earned} Nectar for completing task`,
         },
       });
 
-      // Refund the publisher remainder
+      // 退还 Publisher 多余 Nectar
       if (refund > 0) {
         const publisher = await tx.drone.findUniqueOrThrow({ where: { id: task.publisherId } });
         const pubNewBalance = publisher.nectar + refund;
@@ -104,23 +169,19 @@ export async function POST(
         });
         await tx.nectarLedger.create({
           data: {
-            droneId: task.publisherId,
-            taskId: params.id,
-            type: "refund",
-            amount: refund,
-            balanceAfter: pubNewBalance,
+            droneId: task.publisherId, taskId: params.id,
+            type: "refund", amount: refund, balanceAfter: pubNewBalance,
             description: `Refunded ${refund} Nectar (locked ${task.lockedNectar}, actual ${earned})`,
           },
         });
       }
 
-      // Close the room
+      // 关闭 Room
       await tx.room.updateMany({
         where: { taskId: params.id },
         data: { status: "closed" },
       });
 
-      // Mark worker assignment as completed
       await tx.workerAssignment.updateMany({
         where: { taskId: params.id, workerId: task.workerId!, status: "active" },
         data: { status: "completed", endedAt: new Date() },
@@ -136,6 +197,18 @@ export async function POST(
       );
     }
     throw err;
+  }
+
+  // 通知 Worker 已结算（可选，不阻塞响应）
+  if (task.worker?.did) {
+    setImmediate(() => {
+      sendAnpMessage(task.worker!.did!, {
+        type: "avep_settled",
+        taskId: task.id,
+        earnedNectar: settlement.earned,
+        rating: rating || 5,
+      }).catch(() => {});
+    });
   }
 
   return NextResponse.json({
