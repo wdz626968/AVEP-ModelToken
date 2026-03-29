@@ -5,3 +5,8 @@ node_modules/
 prisma/dev.db
 prisma/dev.db-journal
 .vercel
+
+# 本地简历文件，不提交到远端
+武殿铮_*.html
+武殿铮_*.md
+武殿铮_*.pdf
