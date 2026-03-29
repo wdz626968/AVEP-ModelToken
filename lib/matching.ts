@@ -1,5 +1,6 @@
 import { prisma } from "./prisma";
 import type { Drone, TrustScore } from "@prisma/client";
+import { ACK_DEADLINE_MS } from "./constants";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -61,7 +62,7 @@ export interface ScoreBreakdown {
 // Constants
 // ---------------------------------------------------------------------------
 
-const HEARTBEAT_WINDOW_MS = 30 * 60 * 1000;
+const HEARTBEAT_WINDOW_MS = 20 * 60 * 1000; // 与 heartbeatFreshnessScore 截止对齐（>20min 得 0 分无意义进候选池）
 const MAX_CANDIDATES = 50;
 const DEFAULT_MAX_CONCURRENT_TASKS = 3;
 const SYSTEM_MAX_CONCURRENT_TASKS = 10; // 防止 Worker 自声明过高
@@ -558,4 +559,231 @@ export async function generateMatchHint(
     suggestedPollIntervalMs,
     taskExpiresAt: expiresAt.toISOString(),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Worker 上线补撮合
+// ---------------------------------------------------------------------------
+
+/**
+ * 当 Worker 上线（availableForWork=true）时，尝试将积压的 pending 任务分配给该 Worker。
+ *
+ * 策略：
+ *  - 只处理状态为 "pending" 的任务（创建时没有匹配到 Worker 的）
+ *  - 用 scoreTaskForWorker 对所有 pending 任务评分，取最高分任务依次分配
+ *  - 受 Worker 的 maxConcurrentTasks 上限约束
+ *  - 每次分配完成后通过 ANP 推送通知 Worker
+ *  - 全程异步，不阻塞 heartbeat 响应
+ *
+ * @param workerId  Worker 的数据库 ID
+ * @param anpPushFn 注入 ANP 推送函数（避免循环依赖 anp.ts → matching.ts）
+ */
+export async function tryAssignPendingTasksToWorker(
+  workerId: string,
+  anpPushFn: (toDid: string, payload: Record<string, unknown>) => Promise<void>
+): Promise<void> {
+  // 1. 获取 Worker 最新状态（确保仍在线可接单）
+  const worker = await prisma.drone.findUnique({
+    where: { id: workerId },
+    include: {
+      trustScore: true,
+      workerAssignments: { where: { status: "active" }, select: { taskId: true } },
+    },
+  });
+
+  if (
+    !worker ||
+    worker.status !== "active" ||
+    !worker.availableForWork
+  ) return;
+
+  // 2. 计算 Worker 当前可接单槽位
+  let maxConcurrent = 3;
+  if (worker.capabilities) {
+    try {
+      const caps = JSON.parse(worker.capabilities);
+      if (typeof caps.maxConcurrentTasks === "number" && caps.maxConcurrentTasks >= 1) {
+        maxConcurrent = Math.min(Math.floor(caps.maxConcurrentTasks), 10);
+      }
+    } catch { /* malformed, use default */ }
+  }
+  const availableSlots = maxConcurrent - worker.workerAssignments.length;
+  if (availableSlots <= 0) return;
+
+  // 3. 拉取积压 pending 任务（排除该 Worker 自己发布的）
+  const pendingTasks = await prisma.task.findMany({
+    where: {
+      status: "pending",
+      publisherId: { not: workerId },
+    },
+    select: {
+      id: true,
+      title: true,
+      description: true,
+      publicPayload: true,
+      category: true,
+      priority: true,
+      estimatedTokens: true,
+      publisherId: true,
+      createdAt: true,
+      matchPreference: true,
+      publisher: { select: { id: true, name: true, did: true } },
+    },
+    orderBy: { createdAt: "asc" }, // 越早的任务越优先（防止饥饿）
+    take: 50,
+  });
+
+  if (pendingTasks.length === 0) return;
+
+  // 4. 批量查询该 Worker 与各 Publisher 的历史协作数
+  const publisherIds = [...new Set(pendingTasks.map((t) => t.publisherId))];
+  const collabCounts = await prisma.task.groupBy({
+    by: ["publisherId"],
+    where: {
+      workerId,
+      publisherId: { in: publisherIds },
+      status: "completed",
+    },
+    _count: { publisherId: true },
+  });
+  const collabMap = new Map(collabCounts.map((r) => [r.publisherId, r._count.publisherId]));
+
+  // 5. 过滤 matchPreference 硬门槛，再评分排序
+  const trust = worker.trustScore;
+  const scoredTasks = pendingTasks
+    .filter((t) => {
+      if (!t.matchPreference) return true;
+      let pref: MatchPreference;
+      try { pref = JSON.parse(t.matchPreference); } catch { return true; }
+
+      // 排除列表
+      if (pref.excludeWorkerDids?.includes(worker.did ?? "")) return false;
+      // 必须具备的能力
+      if (pref.requireCapabilities?.length) {
+        try {
+          const caps = worker.capabilities ? JSON.parse(worker.capabilities) : {};
+          const workerCats: string[] = caps.categories ?? [];
+          if (!pref.requireCapabilities.every((c) => workerCats.includes(c))) return false;
+        } catch { return false; }
+      }
+      // 最低信任分
+      if (pref.minTrustScore) {
+        const overall = trust?.overallScore ?? 50;
+        if (overall < pref.minTrustScore) return false;
+      }
+      return true;
+    })
+    .map((t) => ({
+      task: t,
+      score: scoreTaskForWorker(t, worker, collabMap.get(t.publisherId) ?? 0),
+    }))
+    .sort((a, b) => b.score - a.score);
+
+  // 6. 依次分配，直到填满槽位
+  let assigned = 0;
+  for (const { task } of scoredTasks) {
+    if (assigned >= availableSlots) break;
+
+    try {
+      // 乐观原子事务：同时检查任务仍为 pending、Worker 仍有空闲槽位
+      const result = await prisma.$transaction(async (tx) => {
+        // 重新检查任务状态（防止并发竞争）
+        const freshTask = await tx.task.findUnique({
+          where: { id: task.id },
+          select: { status: true },
+        });
+        if (!freshTask || freshTask.status !== "pending") return null;
+
+        // 重新检查 Worker 当前负载
+        const activeCount = await tx.workerAssignment.count({
+          where: { workerId, status: "active" },
+        });
+        if (activeCount >= maxConcurrent) return null;
+
+        const now = new Date();
+
+        // 更新任务状态
+        const updatedTask = await tx.task.update({
+          where: { id: task.id },
+          data: {
+            status: "accepted",
+            workerId,
+            acceptedAt: now,
+            ackDeadline: new Date(now.getTime() + ACK_DEADLINE_MS),
+          },
+        });
+
+        // 创建 Room
+        const room = await tx.room.create({
+          data: { taskId: task.id, mode: "centralized", status: "active" },
+        });
+
+        // 创建 WorkerAssignment
+        await tx.workerAssignment.create({
+          data: { taskId: task.id, workerId, status: "active" },
+        });
+
+        // 写入系统消息（记录补撮合来源）
+        await tx.roomMessage.create({
+          data: {
+            roomId: room.id,
+            senderId: task.publisherId,
+            type: "system",
+            content: JSON.stringify({
+              event: "worker_assigned",
+              workerId,
+              workerName: worker.name,
+              mode: "centralized",
+              autoAssigned: true,
+              assignReason: "worker_online_rematch",
+            }),
+          },
+        });
+
+        return { updatedTask, room };
+      });
+
+      if (!result) continue;
+
+      assigned++;
+      console.log(JSON.stringify({
+        event: "rematch_assigned",
+        taskId: task.id,
+        workerId,
+        workerName: worker.name,
+        ts: new Date().toISOString(),
+      }));
+
+      // 7. ANP 推送通知 Worker
+      if (worker.did) {
+        anpPushFn(worker.did, {
+          type: "avep_task_assigned",
+          taskId: task.id,
+          roomId: result.room.id,
+          taskPayload: {
+            title: task.title,
+            description: task.description,
+            estimatedTokens: task.estimatedTokens,
+            category: task.category,
+            priority: task.priority,
+            publicPayload: task.publicPayload ? JSON.parse(task.publicPayload) : null,
+          },
+          publisherDid: task.publisher.did ?? undefined,
+          instructions: [
+            `1. Immediately POST to /api/rooms/${result.room.id}/messages with { "type": "ready", "content": "acknowledged" }`,
+            `2. Execute the task described in taskPayload`,
+            `3. POST result to /api/rooms/${result.room.id}/messages with { "type": "result", "content": { "result": "...", "actualTokens": N } }`,
+          ],
+        }).catch((e: unknown) =>
+          console.error("[ANP] rematch push to worker failed:", e)
+        );
+      }
+    } catch (err) {
+      console.error("[rematch] assign task", task.id, "to worker", workerId, "failed:", err);
+    }
+  }
+
+  if (assigned > 0) {
+    console.log(`[rematch] assigned ${assigned} pending task(s) to worker ${worker.name} (${workerId})`);
+  }
 }

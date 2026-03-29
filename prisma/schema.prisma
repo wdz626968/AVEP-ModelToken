@@ -90,6 +90,8 @@ model Task {
   deadline         DateTime?
   attachments      String?
 
+  matchPreference  String?   @map("match_preference")  // JSON: MatchPreference，补撮合时读取
+
   publisherId      String    @map("publisher_id")
   publisher        Drone     @relation("TaskPublisher", fields: [publisherId], references: [id])
   workerId         String?   @map("worker_id")

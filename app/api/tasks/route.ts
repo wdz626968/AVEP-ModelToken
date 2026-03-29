@@ -69,6 +69,7 @@ export async function POST(request: NextRequest) {
             estimatedTokens, lockedNectar: estimatedTokens,
             priority, category: category || null,
             status: "pending", publisherId: auth.drone.id,
+            matchPreference: matchPreference ? JSON.stringify(matchPreference) : null,
           },
         });
 
@@ -107,16 +108,17 @@ export async function POST(request: NextRequest) {
       if (freshDrone.nectar < estimatedTokens) throw new Error("INSUFFICIENT_NECTAR");
 
         const task = await tx.task.create({
-        data: {
-          title, description,
-          publicPayload: publicPayload ? JSON.stringify(publicPayload) : null,
-          estimatedTokens, lockedNectar: estimatedTokens,
-          priority, category: category || null,
-          status: "accepted", publisherId: auth.drone.id,
-          workerId: bestWorker.id, acceptedAt: new Date(),
-          ackDeadline: new Date(Date.now() + ACK_DEADLINE_MS),
-        },
-      });
+          data: {
+            title, description,
+            publicPayload: publicPayload ? JSON.stringify(publicPayload) : null,
+            estimatedTokens, lockedNectar: estimatedTokens,
+            priority, category: category || null,
+            status: "accepted", publisherId: auth.drone.id,
+            workerId: bestWorker.id, acceptedAt: new Date(),
+            ackDeadline: new Date(Date.now() + ACK_DEADLINE_MS),
+            matchPreference: matchPreference ? JSON.stringify(matchPreference) : null,
+          },
+        });
 
       const room = await tx.room.create({
         data: { taskId: task.id, mode: "centralized", status: "active" },

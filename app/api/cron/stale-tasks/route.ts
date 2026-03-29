@@ -4,6 +4,7 @@ import { sendAnpMessage } from "@/lib/anp";
 import { performSettle, postSettleAsync } from "@/lib/settle";
 import { CIRCUIT_COOLDOWN_MS, MAX_RETRY_COUNT } from "@/lib/constants";
 import type { TaskStatus } from "@/lib/constants";
+import { tryAssignPendingTasksToWorker } from "@/lib/matching";
 
 export const dynamic = "force-dynamic";
 
@@ -268,17 +269,118 @@ export async function GET(request: NextRequest) {
   // 30 分钟冷却后自动恢复为 available（半开状态，下次分配时验证）
   const cooldownCutoff = new Date(now.getTime() - CIRCUIT_COOLDOWN_MS);
 
-  const recoveredCount = await prisma.drone.updateMany({
+  const recoveredWorkers = await prisma.drone.findMany({
     where: {
       status: "inactive",
       availableForWork: false,
       updatedAt: { lt: cooldownCutoff },
     },
-    data: { availableForWork: true },
+    select: { id: true, name: true },
   });
 
-  if (recoveredCount.count > 0) {
-    results.push({ action: "circuit_breaker_reset", count: recoveredCount.count });
+  if (recoveredWorkers.length > 0) {
+    await prisma.drone.updateMany({
+      where: { id: { in: recoveredWorkers.map((w) => w.id) } },
+      data: { availableForWork: true },
+    });
+
+    results.push({ action: "circuit_breaker_reset", count: recoveredWorkers.length });
+
+    // 恢复后立即触发补撮合，让这些 Worker 承接积压的 pending 任务
+    for (const worker of recoveredWorkers) {
+      tryAssignPendingTasksToWorker(
+        worker.id,
+        async (toDid, payload) => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          await sendAnpMessage(toDid, payload as any);
+        }
+      ).catch((e) => console.error(`[cron] rematch for recovered worker ${worker.name} failed:`, e));
+    }
+  }
+
+  // ── 5. stalled 任务自动恢复：超过 24h 仍 stalled 则重置为 pending ────────────
+  // cron 每天运行一次，正好覆盖这个场景：昨天进入 stalled 的任务今天自动重开
+  const stalledCutoff = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  const stalledRevived = await prisma.task.updateMany({
+    where: {
+      status: "stalled",
+      updatedAt: { lt: stalledCutoff },
+    },
+    data: {
+      status: "pending",
+      workerId: null,
+      retryCount: 0,
+      ackDeadline: null,
+      activityDeadline: null,
+    },
+  });
+
+  if (stalledRevived.count > 0) {
+    results.push({ action: "stalled_revived", count: stalledRevived.count });
+    console.log(JSON.stringify({
+      event: "stalled_tasks_revived",
+      count: stalledRevived.count,
+      ts: now.toISOString(),
+    }));
+  }
+
+  // ── 6. 兜底：accepted 状态但 ackDeadline 和 activityDeadline 均为 null ────────
+  // 正常情况下不应出现，但 accept 端点历史 bug 可能遗留此状态
+  // 超过 30 分钟无任何进展，强制重置为 pending
+  const ghostCutoff = new Date(now.getTime() - 30 * 60 * 1000);
+  const ghostTasks = await prisma.task.findMany({
+    where: {
+      status: "accepted",
+      ackDeadline: null,
+      activityDeadline: null,
+      workerId: { not: null },
+      acceptedAt: { lt: ghostCutoff },
+    },
+    select: { id: true, workerId: true, retryCount: true, room: { select: { id: true } } },
+    take: 20,
+  });
+
+  for (const task of ghostTasks) {
+    const newRetryCount = task.retryCount + 1;
+    const shouldStall = newRetryCount >= MAX_RETRY_COUNT;
+
+    await prisma.$transaction(async (tx) => {
+      await tx.workerAssignment.updateMany({
+        where: { taskId: task.id, workerId: task.workerId!, status: "active" },
+        data: { status: "failed", endedAt: now, reason: "ghost_accepted" },
+      });
+      await tx.task.update({
+        where: { id: task.id },
+        data: {
+          status: shouldStall ? ("stalled" as TaskStatus) : "pending",
+          workerId: null,
+          ackDeadline: null,
+          activityDeadline: null,
+          retryCount: newRetryCount,
+        },
+      });
+      if (task.room) {
+        await tx.roomMessage.create({
+          data: {
+            roomId: task.room.id,
+            senderId: task.workerId!,
+            type: "system",
+            content: JSON.stringify({
+              event: "ghost_accepted_reset",
+              previousWorkerId: task.workerId,
+              retryCount: newRetryCount,
+              shouldStall,
+            }),
+          },
+        });
+      }
+    });
+
+    results.push({
+      taskId: task.id,
+      action: shouldStall ? "ghost_stalled" : "ghost_requeued",
+      retryCount: newRetryCount,
+    });
   }
 
   return NextResponse.json({

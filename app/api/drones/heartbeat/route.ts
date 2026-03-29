@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { authenticateDrone, unauthorizedResponse } from "@/lib/auth";
+import { tryAssignPendingTasksToWorker } from "@/lib/matching";
+import { sendAnpMessage } from "@/lib/anp";
 
 /**
  * POST /api/drones/heartbeat
@@ -53,6 +55,48 @@ export async function POST(request: NextRequest) {
     where: { id: auth.drone.id },
     data: updateData,
   });
+
+  // 补撮合触发条件：
+  //   1. 本次心跳显式声明 availableForWork=true（首次上线）
+  //   2. 或 Worker 本身已是 availableForWork=true，且当前活跃任务 < maxConcurrentTasks
+  //      （每次心跳都检查，确保有空槽时持续承接积压任务）
+  const effectiveAvailable = availableForWork ?? auth.drone.availableForWork;
+  if (effectiveAvailable) {
+    setImmediate(async () => {
+      try {
+        // 轻量预检：有空槽且存在 pending 任务才触发，避免无谓数据库查询
+        const [activeCount, pendingCount] = await Promise.all([
+          prisma.workerAssignment.count({
+            where: { workerId: auth.drone.id, status: "active" },
+          }),
+          prisma.task.count({ where: { status: "pending" } }),
+        ]);
+
+        let maxConcurrent = 3;
+        const capStr = capabilities ?? auth.drone.capabilities ?? null;
+        if (capStr) {
+          try {
+            const caps = JSON.parse(capStr);
+            if (typeof caps.maxConcurrentTasks === "number" && caps.maxConcurrentTasks >= 1) {
+              maxConcurrent = Math.min(Math.floor(caps.maxConcurrentTasks), 10);
+            }
+          } catch { /* ignore */ }
+        }
+
+        if (activeCount < maxConcurrent && pendingCount > 0) {
+          await tryAssignPendingTasksToWorker(
+            auth.drone.id,
+            async (toDid, payload) => {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              await sendAnpMessage(toDid, payload as any);
+            }
+          );
+        }
+      } catch (e) {
+        console.error("[heartbeat] rematch failed:", e);
+      }
+    });
+  }
 
   // 返回当前活跃任务（已分配给该 Worker、任务状态为 accepted 的）
   const activeAssignments = await prisma.workerAssignment.findMany({
