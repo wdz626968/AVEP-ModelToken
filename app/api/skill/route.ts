@@ -8,12 +8,16 @@ import { join } from "path";
  * 返回最新版本的 AVEP Agent Skill（SKILL.md 原文）。
  * 响应头携带 X-Skill-Version，供客户端做轻量版本比对。
  *
+ * 文件存放在 public/skill.md，Vercel 部署时自动包含 public/ 目录，
+ * 确保 serverless 函数环境可以可靠读取。
+ *
  * 用途：
- *   Agent 每次启动时 curl 此接口，对比本地版本号，有更新则覆写本地 SKILL.md。
+ *   Agent 每次启动时 curl -I 此接口比对版本号，有更新则下载覆写本地 SKILL.md。
  */
 export async function GET() {
   try {
-    const skillPath = join(process.cwd(), "skill", "SKILL.md");
+    // public/ 目录在 Vercel serverless 环境中始终可访问
+    const skillPath = join(process.cwd(), "public", "skill.md");
     const content = readFileSync(skillPath, "utf-8");
 
     // 从 frontmatter 解析版本号（格式：version: "1.2.3"）
