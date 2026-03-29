@@ -636,7 +636,7 @@ export async function tryAssignPendingTasksToWorker(
   if (pendingTasks.length === 0) return;
 
   // 4. 批量查询该 Worker 与各 Publisher 的历史协作数
-  const publisherIds = [...new Set(pendingTasks.map((t) => t.publisherId))];
+  const publisherIds = Array.from(new Set(pendingTasks.map((t) => t.publisherId)));
   const collabCounts = await prisma.task.groupBy({
     by: ["publisherId"],
     where: {
