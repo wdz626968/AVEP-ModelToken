@@ -36,6 +36,9 @@ model Drone {
   availableForWork  Boolean   @default(false) @map("available_for_work")
   onlineAt          DateTime? @map("online_at")
 
+  walletAddress     String?   @unique @map("wallet_address")
+  walletNetwork     String?   @default("base-sepolia") @map("wallet_network")
+
   createdAt         DateTime  @default(now()) @map("created_at")
   updatedAt         DateTime  @updatedAt @map("updated_at")
 
@@ -95,6 +98,16 @@ model Task {
   result           String?
   actualTokens     Int?      @map("actual_tokens")
   rating           Int?
+
+  autoSettle       Boolean   @default(false) @map("auto_settle")
+
+  // 租约字段（行业最佳实践：消息所有权租约，替代心跳机制）
+  // ackDeadline:      分配后 30s 内 Worker 必须向 Room 发任意消息（框架层自动 ACK），超时视为 Worker 离线
+  // activityDeadline: ACK 后 Worker 必须每 10min 有 Room 活动（发消息/存 Checkpoint），超时视为执行中失联
+  // retryCount:       同一任务已重试次数，≥3 次进入 stalled 状态等待人工介入
+  ackDeadline      DateTime? @map("ack_deadline")
+  activityDeadline DateTime? @map("activity_deadline")
+  retryCount       Int       @default(0) @map("retry_count")
 
   acceptedAt       DateTime? @map("accepted_at")
   completedAt      DateTime? @map("completed_at")

@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { authenticateDrone, unauthorizedResponse } from "@/lib/auth";
 import { smartEncrypt, smartDecrypt } from "@/lib/crypto";
 import { sendAnpMessage } from "@/lib/anp";
+import type { TaskStatus } from "@/lib/constants";
 
 /**
  * GET /api/rooms/:id/messages — List messages in a Room (decrypts at rest)
@@ -109,7 +110,7 @@ export async function POST(
 
   const validTypes = [
     "task_payload", "ready", "progress", "clarify",
-    "supplement", "result", "checkpoint", "system",
+    "supplement", "result", "checkpoint", "worker_abort", "system",
   ];
   if (!validTypes.includes(type)) {
     return NextResponse.json(
@@ -132,6 +133,26 @@ export async function POST(
     include: { sender: { select: { id: true, name: true, did: true } } },
   });
 
+  // ── Worker 发任何非 system/worker_abort 消息时，更新租约状态 ──────────────
+  // worker_abort 不刷新租约（Bug3修复：避免先 availableForWork=true 再 false 的逻辑倒置）
+  const isWorkerMessage = auth.drone.id === room.task.workerId
+    && type !== "system"
+    && type !== "worker_abort";
+  if (isWorkerMessage) {
+    const ACTIVITY_DEADLINE_MS = 10 * 60 * 1000;
+    await prisma.task.update({
+      where: { id: room.taskId },
+      data: {
+        ackDeadline: null,
+        activityDeadline: new Date(Date.now() + ACTIVITY_DEADLINE_MS),
+      },
+    });
+    await prisma.drone.update({
+      where: { id: auth.drone.id },
+      data: { availableForWork: true, status: "active" },
+    });
+  }
+
   // ── 当 Worker 发送 result 消息时，触发后续流程 ─────────────────────────
   if (type === "result") {
     setImmediate(async () => {
@@ -139,10 +160,26 @@ export async function POST(
         const SETTLE_DEADLINE_HOURS = 48;
         const settleDeadline = new Date(Date.now() + SETTLE_DEADLINE_HOURS * 60 * 60 * 1000);
 
-        // 1. 将任务标记为 result_pending，设置结算截止时间
+        // 解析 result 内容，提取 actualTokens（供 Publisher 参考）
+        let parsedContent: Record<string, unknown> = {};
+        try {
+          parsedContent = typeof content === "string" ? JSON.parse(content) : content;
+        } catch { /* 内容非 JSON，忽略 */ }
+        const actualTokens = typeof parsedContent.actualTokens === "number"
+          ? parsedContent.actualTokens
+          : null;
+        const resultText = typeof parsedContent.result === "string"
+          ? parsedContent.result
+          : rawContent;
+
+        // 1. 将任务标记为 result_pending，设置结算截止时间，清除活动截止
         const task = await prisma.task.update({
           where: { id: room.taskId },
-          data: { status: "result_pending", settleDeadline },
+          data: {
+            status: "result_pending",
+            settleDeadline,
+            activityDeadline: null, // 任务已完成，不再需要续租
+          },
           include: {
             publisher: { select: { id: true, did: true, name: true } },
           },
@@ -154,7 +191,7 @@ export async function POST(
           data: { availableForWork: true },
         });
 
-        // 3. ANP 推送给 Publisher：结果已就绪，请在截止前确认
+        // 3. ANP 推送给 Publisher：结果已就绪，直接带上结果内容（Publisher 无需读 Room）
         if (task.publisher.did) {
           await sendAnpMessage(task.publisher.did, {
             type: "avep_result_ready",
@@ -162,11 +199,76 @@ export async function POST(
             roomId: params.id,
             settleDeadline: settleDeadline.toISOString(),
             workerName: auth.drone.name,
-            note: `Worker has submitted results. Please confirm via POST /api/tasks/${task.id}/settle within ${SETTLE_DEADLINE_HOURS}h, or the platform will auto-settle.`,
+            // 直接内嵌结果内容，Publisher 无需主动拉取 Room 消息
+            result: resultText,
+            ...(actualTokens !== null ? { actualTokens } : {}),
+            note: `Task completed. Auto-settle in ${SETTLE_DEADLINE_HOURS}h if no action. To confirm: POST /api/tasks/${task.id}/settle`,
           });
         }
       } catch (e) {
         console.error("[result] post-processing failed:", e);
+      }
+    });
+  }
+
+  // ── 当 Worker 主动发送 worker_abort 消息时，立即触发重新撮合 ─────────────
+  if (type === "worker_abort") {
+    setImmediate(async () => {
+      try {
+        let reason = "worker_abort";
+        try {
+          const parsed = typeof content === "string" ? JSON.parse(content) : content;
+          reason = parsed.reason || reason;
+        } catch { /* 忽略 */ }
+
+        // Bug2修复：整个 read-modify-write 包入事务，防止与 cron 并发导致竞态
+        await prisma.$transaction(async (tx) => {
+          const task = await tx.task.findUnique({
+            where: { id: room.taskId },
+          });
+          if (!task || (task.status !== "accepted" && task.status !== "result_pending")) return;
+
+          // 标记 WorkerAssignment 为 failed
+          await tx.workerAssignment.updateMany({
+            where: { taskId: room.taskId, workerId: auth.drone.id, status: "active" },
+            data: { status: "failed", endedAt: new Date(), reason },
+          });
+
+          // 标记 Worker 不可用（熔断）
+          await tx.drone.update({
+            where: { id: auth.drone.id },
+            data: { availableForWork: false },
+          });
+
+          const newRetryCount = task.retryCount + 1;
+          if (newRetryCount >= 3) {
+            await tx.task.update({
+              where: { id: room.taskId },
+              data: {
+                status: "stalled" as TaskStatus,
+                retryCount: newRetryCount,
+                ackDeadline: null,
+                activityDeadline: null,
+              },
+            });
+            console.log(JSON.stringify({ event: "task_stalled", taskId: room.taskId, reason: "max_retries_exceeded", ts: new Date().toISOString() }));
+          } else {
+            await tx.task.update({
+              where: { id: room.taskId },
+              data: {
+                status: "pending",
+                workerId: null,
+                retryCount: newRetryCount,
+                ackDeadline: null,
+                activityDeadline: null,
+              },
+            });
+          }
+        });
+
+        console.log(JSON.stringify({ event: "worker_abort", taskId: room.taskId, workerId: auth.drone.id, reason, ts: new Date().toISOString() }));
+      } catch (e) {
+        console.error("[worker_abort] post-processing failed:", e);
       }
     });
   }

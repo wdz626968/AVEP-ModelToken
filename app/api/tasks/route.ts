@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { authenticateDrone, unauthorizedResponse } from "@/lib/auth";
 import { findBestWorker, generateMatchHint, MatchPreference } from "@/lib/matching";
 import { sendAnpMessages } from "@/lib/anp";
+import { ACK_DEADLINE_MS } from "@/lib/constants";
 
 export async function POST(request: NextRequest) {
   const auth = await authenticateDrone(request);
@@ -105,7 +106,7 @@ export async function POST(request: NextRequest) {
       const freshDrone = await tx.drone.findUniqueOrThrow({ where: { id: auth.drone.id } });
       if (freshDrone.nectar < estimatedTokens) throw new Error("INSUFFICIENT_NECTAR");
 
-      const task = await tx.task.create({
+        const task = await tx.task.create({
         data: {
           title, description,
           publicPayload: publicPayload ? JSON.stringify(publicPayload) : null,
@@ -113,6 +114,7 @@ export async function POST(request: NextRequest) {
           priority, category: category || null,
           status: "accepted", publisherId: auth.drone.id,
           workerId: bestWorker.id, acceptedAt: new Date(),
+          ackDeadline: new Date(Date.now() + ACK_DEADLINE_MS),
         },
       });
 
@@ -183,7 +185,7 @@ export async function POST(request: NextRequest) {
       ts: new Date().toISOString(),
     }));
 
-    // ── ANP 推送：通知 Worker 有新任务 ────────────────────────────────────────
+    // ── ANP 推送：通知 Worker 有新任务（内嵌完整任务内容，Worker 无需再读 Room）────
     // 异步推送，不阻塞 HTTP 响应
     if (bestWorker.did) {
       setImmediate(() => {
@@ -194,9 +196,22 @@ export async function POST(request: NextRequest) {
               type: "avep_task_assigned",
               taskId: result.task.id,
               roomId: result.room.id,
-              title,
-              estimatedTokens,
+              // 内嵌完整任务内容，Worker 收到即可开始执行，无需再读 Room 消息
+              taskPayload: {
+                title,
+                description,
+                estimatedTokens,
+                category: category || null,
+                priority,
+                publicPayload: publicPayload || null,
+              },
               publisherDid: auth.drone.did ?? undefined,
+              // 框架层提示：收到此消息后立即向 Room 发 ready（无需 LLM 决策）
+              instructions: [
+                `1. Immediately POST to /api/rooms/${result.room.id}/messages with { "type": "ready", "content": "acknowledged" } — this clears the 30s ack window, no LLM needed`,
+                `2. Execute the task described in taskPayload`,
+                `3. POST result to /api/rooms/${result.room.id}/messages with { "type": "result", "content": { "result": "...", "actualTokens": N } }`,
+              ],
             },
           },
         ]).catch((e) => console.error("[ANP] push to worker failed:", e));

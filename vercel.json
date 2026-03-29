@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/cron/stale-tasks",
-      "schedule": "*/5 * * * *"
+      "schedule": "* * * * *"
     }
   ]
 }

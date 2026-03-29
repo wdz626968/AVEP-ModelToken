@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { authenticateDrone, unauthorizedResponse } from "@/lib/auth";
 import { sendAnpMessage } from "@/lib/anp";
+import { performSettle, postSettleAsync } from "@/lib/settle";
 
 /**
  * POST /api/tasks/:id/settle
@@ -16,10 +17,10 @@ import { sendAnpMessage } from "@/lib/anp";
  *
  * Body:
  *   {
- *     action: "accept" | "reject",   // 接受或拒绝结果
- *     result: string,                 // 结算备注（accept 时为确认描述，reject 时为拒绝原因）
- *     actualTokens: number,           // accept 时必填：实际消耗 token 数
- *     rating: number,                 // 1-5，默认 5
+ *     action: "accept" | "reject",
+ *     result: string,
+ *     actualTokens: number,   // accept 时必填
+ *     rating: number,         // 1-5，默认 5
  *   }
  */
 export async function POST(
@@ -52,8 +53,6 @@ export async function POST(
       { status: 409 }
     );
   }
-
-  // 允许在 "accepted"（兼容旧流程）或 "result_pending"（新流程）状态下结算
   if (task.status !== "accepted" && task.status !== "result_pending") {
     return NextResponse.json(
       { error: `Cannot settle task in status "${task.status}"` },
@@ -80,9 +79,28 @@ export async function POST(
       );
     }
 
-    await prisma.task.update({
-      where: { id: params.id },
-      data: { status: "rejected", result: `[REJECTED] ${result}` },
+    await prisma.$transaction(async (tx) => {
+      await tx.task.update({
+        where: { id: params.id },
+        data: {
+          status: "rejected",
+          result: `[REJECTED] ${result}`,
+          ackDeadline: null,
+          activityDeadline: null,
+        },
+      });
+
+      // 释放 Worker，使其可以接新任务
+      await tx.drone.update({
+        where: { id: task.workerId! },
+        data: { availableForWork: true },
+      });
+
+      // 标记 WorkerAssignment 为失败
+      await tx.workerAssignment.updateMany({
+        where: { taskId: params.id, workerId: task.workerId!, status: "active" },
+        data: { status: "failed", endedAt: new Date(), reason: "publisher_rejected" },
+      });
     });
 
     // 通知 Worker 被拒绝
@@ -98,11 +116,11 @@ export async function POST(
 
     return NextResponse.json({
       status: "rejected",
-      message: "Task rejected. You may call /switch-worker to reassign.",
+      message: "Task rejected. Worker has been released. You may call /switch-worker to reassign.",
     });
   }
 
-  // ── 接受结果，执行结算 ────────────────────────────────────────────────────
+  // ── 接受结果，执行结算（复用 lib/settle.ts）──────────────────────────────
   if (!result) {
     return NextResponse.json(
       { error: "result is required when action=accept" },
@@ -116,79 +134,9 @@ export async function POST(
     );
   }
 
-  const capped = Math.min(actualTokens, task.lockedNectar);
-  const earned = capped;
-  const refund = task.lockedNectar - earned;
-
   let settlement: { earned: number; refund: number };
   try {
-    settlement = await prisma.$transaction(async (tx) => {
-      const fresh = await tx.task.findUnique({ where: { id: params.id } });
-      if (!fresh || (fresh.status !== "accepted" && fresh.status !== "result_pending")) {
-        throw new Error("CONFLICT:already_settled");
-      }
-
-      await tx.task.update({
-        where: { id: params.id },
-        data: {
-          status: "completed",
-          result,
-          actualTokens: capped,
-          rating: rating || null,
-          completedAt: new Date(),
-          settleDeadline: null,
-        },
-      });
-
-      // 付款给 Worker
-      const worker = await tx.drone.findUniqueOrThrow({ where: { id: task.workerId! } });
-      const workerNewBalance = worker.nectar + earned;
-      await tx.drone.update({
-        where: { id: task.workerId! },
-        data: {
-          nectar: workerNewBalance,
-          totalEarned: { increment: earned },
-          tasksCompleted: { increment: 1 },
-        },
-      });
-      await tx.nectarLedger.create({
-        data: {
-          droneId: task.workerId!, taskId: params.id,
-          type: "earn", amount: earned, balanceAfter: workerNewBalance,
-          description: `Earned ${earned} Nectar for completing task`,
-        },
-      });
-
-      // 退还 Publisher 多余 Nectar
-      if (refund > 0) {
-        const publisher = await tx.drone.findUniqueOrThrow({ where: { id: task.publisherId } });
-        const pubNewBalance = publisher.nectar + refund;
-        await tx.drone.update({
-          where: { id: task.publisherId },
-          data: { nectar: pubNewBalance },
-        });
-        await tx.nectarLedger.create({
-          data: {
-            droneId: task.publisherId, taskId: params.id,
-            type: "refund", amount: refund, balanceAfter: pubNewBalance,
-            description: `Refunded ${refund} Nectar (locked ${task.lockedNectar}, actual ${earned})`,
-          },
-        });
-      }
-
-      // 关闭 Room
-      await tx.room.updateMany({
-        where: { taskId: params.id },
-        data: { status: "closed" },
-      });
-
-      await tx.workerAssignment.updateMany({
-        where: { taskId: params.id, workerId: task.workerId!, status: "active" },
-        data: { status: "completed", endedAt: new Date() },
-      });
-
-      return { earned, refund };
-    });
+    settlement = await performSettle(params.id, actualTokens, rating, result);
   } catch (err) {
     if (err instanceof Error && err.message.startsWith("CONFLICT:")) {
       return NextResponse.json(
@@ -199,22 +147,25 @@ export async function POST(
     throw err;
   }
 
-  // 通知 Worker 已结算（可选，不阻塞响应）
-  if (task.worker?.did) {
-    setImmediate(() => {
-      sendAnpMessage(task.worker!.did!, {
-        type: "avep_settled",
-        taskId: task.id,
-        earnedNectar: settlement.earned,
-        rating: rating || 5,
-      }).catch(() => {});
-    });
-  }
+  // 异步后处理：ANP 通知双方 + 链上 USDC 转账
+  postSettleAsync({
+    taskId: task.id,
+    publisherId: task.publisherId,
+    workerId: task.workerId,
+    workerDid: task.worker?.did,
+    publisherDid: task.publisher?.did,
+    earned: settlement.earned,
+    rating,
+  });
 
   return NextResponse.json({
     status: "completed",
     earnedByWorker: settlement.earned,
     refundedToPublisher: settlement.refund,
     rating: rating || null,
+    onChain: {
+      usdcTransfer: settlement.earned * 0.001,
+      note: "链上 USDC 转账已异步提交，可通过 GET /api/drones/me/wallet 查询余额确认",
+    },
   });
 }

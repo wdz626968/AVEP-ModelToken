@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { isValidDIDFormat, resolveDIDDocument } from "@/lib/did";
+import { getOrCreateDroneWallet } from "@/lib/wallet";
 import { hash } from "bcryptjs";
 import { randomBytes } from "crypto";
 
@@ -125,6 +126,16 @@ export async function POST(request: NextRequest) {
 
     const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
 
+    // 异步创建链上钱包（不阻塞注册响应）
+    let walletAddress: string | null = null;
+    try {
+      const wallet = await getOrCreateDroneWallet(drone.id);
+      walletAddress = wallet.address;
+    } catch (walletErr) {
+      // 钱包创建失败不影响注册，后续可重试
+      console.error("[wallet] Failed to create wallet on register:", walletErr);
+    }
+
     return NextResponse.json(
       {
         id: drone.id,
@@ -137,6 +148,9 @@ export async function POST(request: NextRequest) {
         adUrl: `${BASE_URL}/api/agents/${drone.id}/ad`,
         nectar: drone.nectar,
         status: drone.status,
+        wallet: walletAddress
+          ? { address: walletAddress, network: process.env.CDP_NETWORK ?? "base-sepolia" }
+          : null,
         didDocument: {
           id: didDocument.id,
           verificationMethodCount: didDocument.verificationMethod?.length ?? 0,
