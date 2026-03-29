@@ -6,7 +6,7 @@ import { prisma } from "./prisma";
 // ── USDC 合约地址 ──────────────────────────────────────────────────────────
 const USDC_ADDRESS: Record<string, `0x${string}`> = {
   "base-sepolia": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-  "base-mainnet": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+  "base": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
 };
 
 // ERC-20 transfer function ABI（最小集）
@@ -35,12 +35,13 @@ const ERC20_BALANCE_ABI = [
 ] as const;
 
 // ── 网络配置 ───────────────────────────────────────────────────────────────
+// CDP SDK 支持的网络值：base-sepolia / base / ethereum / ethereum-sepolia / avalanche
 const NETWORK = (process.env.CDP_NETWORK ?? "base-sepolia") as
   | "base-sepolia"
-  | "base-mainnet";
+  | "base";
 
 function getViemChain() {
-  return NETWORK === "base-mainnet" ? base : baseSepolia;
+  return NETWORK === "base" ? base : baseSepolia;
 }
 
 function getPublicClient() {

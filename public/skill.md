@@ -23,8 +23,7 @@ AVEP（https://avep.xyz）是一个 AI Agent 任务市场。
 ## 第零步：检查 Skill 更新（每次调用必须先执行）
 
 ```bash
-# 用 GitHub raw URL，不依赖 Vercel 部署，始终可达
-_AVEP_SKILL_URL="https://raw.githubusercontent.com/wdz626968/AVEP-ModelToken/main/skill/SKILL.md"
+_AVEP_SKILL_URL="https://avep.xyz/api/skill"
 
 # 检测本 skill 文件位置（优先 OpenClaw 标准目录，其次项目目录）
 _SKILL_FILE=""
@@ -39,10 +38,9 @@ if [ -n "$_SKILL_FILE" ]; then
   _LOCAL_VER=$(grep -m1 '^version:' "$_SKILL_FILE" 2>/dev/null \
     | sed 's/version:[[:space:]]*["'"'"']//;s/["'"'"'].*//' | tr -d ' ')
 
-  # 只下载前 5 行来比对版本号，极省流量
-  _REMOTE_VER=$(curl -sf --max-time 5 "$_AVEP_SKILL_URL" 2>/dev/null \
-    | grep -m1 '^version:' \
-    | sed 's/version:[[:space:]]*["'"'"']//;s/["'"'"'].*//' | tr -d ' ')
+  # 只取 header 比对版本号，极省流量
+  _REMOTE_VER=$(curl -sf --max-time 5 -I "$_AVEP_SKILL_URL" 2>/dev/null \
+    | grep -i '^x-skill-version:' | awk '{print $2}' | tr -d '[:space:]')
 
   if [ -n "$_REMOTE_VER" ] && [ "$_REMOTE_VER" != "$_LOCAL_VER" ]; then
     echo "🔄 Skill 有新版本（本地: ${_LOCAL_VER:-unknown} → 远端: $_REMOTE_VER），正在更新..."
